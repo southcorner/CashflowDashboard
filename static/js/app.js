@@ -503,11 +503,47 @@ function renderReports() {
 }
 
 // ── Settings ───────────────────────────────────────────────────────────────
+async function renderBackupList() {
+  const list = document.getElementById("backupList");
+  const backups = await api("/api/backups");
+  if (!backups.length) {
+    list.innerHTML = `<p style="color:var(--text-muted);font-size:13px;">No backups yet.</p>`;
+    return;
+  }
+  list.innerHTML = `
+    <table class="data-table" style="font-size:13px;">
+      <thead><tr><th>File</th><th>Created</th><th style="text-align:right;">Size</th><th></th></tr></thead>
+      <tbody>
+        ${backups.map(b => `
+          <tr>
+            <td>${b.filename}</td>
+            <td>${new Date(b.created_at).toLocaleString("en-IN")}</td>
+            <td style="text-align:right;">${b.size_kb} KB</td>
+            <td><a class="btn btn-outline btn-sm" href="/api/backup/${b.filename}" download>↓ Download</a></td>
+          </tr>`).join("")}
+      </tbody>
+    </table>`;
+}
+
 function renderSettings() {
   const s = state.settings;
   renderTagList("salesChannelTags", s.sales_channels || [], "sales");
   renderTagList("outstandingChannelTags", s.outstanding_channels || [], "outstanding");
   renderCustomCols(s.custom_columns || []);
+  renderBackupList();
+
+  document.getElementById("emailEnabled").checked = !!s.email_enabled;
+  document.getElementById("emailSender").value = s.email_sender || "";
+  document.getElementById("emailPassword").value = "";
+  document.getElementById("emailPassword").placeholder = s.email_password
+    ? "Leave blank to keep existing password"
+    : "App password (not your Gmail password)";
+  document.getElementById("emailRecipient").value = s.email_recipient || "";
+
+  const lastSentEl = document.getElementById("emailLastSent");
+  lastSentEl.textContent = s.email_last_sent
+    ? `Last sent: ${new Date(s.email_last_sent).toLocaleString("en-IN")}`
+    : "Never sent";
 }
 
 function renderTagList(containerId, items, type) {
@@ -754,5 +790,64 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
   document.getElementById("newOutstandingChannel").addEventListener("keydown", (e) => {
     if (e.key === "Enter") document.getElementById("addOutstandingChannelBtn").click();
+  });
+
+  // Backup: create
+  document.getElementById("createBackupBtn").addEventListener("click", async () => {
+    const btn = document.getElementById("createBackupBtn");
+    btn.disabled = true;
+    btn.textContent = "Creating…";
+    try {
+      const res = await api("/api/backup", { method: "POST" });
+      if (res.success) {
+        showMsg("backupMsg", `Backup created: ${res.filename}`, "success");
+        renderBackupList();
+      } else {
+        showMsg("backupMsg", res.error || "Failed.", "error");
+      }
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "Create Backup Now";
+    }
+  });
+
+  // Email settings: save
+  document.getElementById("saveEmailSettingsBtn").addEventListener("click", async () => {
+    const pwd = document.getElementById("emailPassword").value.trim();
+    const payload = {
+      email_enabled: document.getElementById("emailEnabled").checked,
+      email_sender: document.getElementById("emailSender").value.trim(),
+      email_recipient: document.getElementById("emailRecipient").value.trim(),
+    };
+    if (pwd) payload.email_password = pwd;
+
+    const res = await api("/api/settings", { method: "POST", body: JSON.stringify(payload) });
+    if (res.success) {
+      showMsg("emailMsg", "Email settings saved.", "success");
+      await loadAll();
+      renderSettings();
+    } else {
+      showMsg("emailMsg", res.error || "Failed to save.", "error");
+    }
+  });
+
+  // Email settings: send test
+  document.getElementById("sendTestEmailBtn").addEventListener("click", async () => {
+    const btn = document.getElementById("sendTestEmailBtn");
+    btn.disabled = true;
+    btn.textContent = "Sending…";
+    try {
+      const res = await api("/api/send-test-email", { method: "POST" });
+      if (res.success) {
+        showMsg("emailMsg", "Test email sent successfully!", "success");
+        await loadAll();
+        renderSettings();
+      } else {
+        showMsg("emailMsg", res.error || "Failed to send.", "error");
+      }
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "Send Test Now";
+    }
   });
 });

@@ -1,32 +1,47 @@
 import os
 import io
 import json
+import smtplib
+import ssl
+import atexit
+import zipfile
 from copy import deepcopy
-from datetime import datetime
+from datetime import datetime, date, timedelta
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment
 from openpyxl.utils import get_column_letter
 from flask import Flask, jsonify, render_template, request, send_file
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
 
-app = Flask(__name__)
+app = Flask(__name__, template_folder="template")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data")
 DAILY_FILE = os.path.join(DATA_DIR, "daily_data.json")
 SETTINGS_FILE = os.path.join(DATA_DIR, "settings.json")
 AUDIT_FILE = os.path.join(DATA_DIR, "audit_log.json")
+BACKUP_DIR = os.path.join(DATA_DIR, "backups")
 
 DEFAULT_SETTINGS = {
     "sales_channels": ["DF", "AMZ PO", "FK PO", "Katana site", "Offline", "Badpeople site"],
     "outstanding_channels": ["AMZ", "FK", "Offline"],
     "custom_columns": [],
     "delete_password": "spacegoods123",
+    "email_enabled": False,
+    "email_sender": "",
+    "email_password": "",
+    "email_recipient": "",
+    "email_last_sent": None,
 }
 
 
 def ensure_dirs():
     os.makedirs(DATA_DIR, exist_ok=True)
+    os.makedirs(BACKUP_DIR, exist_ok=True)
 
 
 def load_json(path, default):
@@ -75,6 +90,208 @@ def compute_custom(row, custom_columns):
     return results
 
 
+# ── Email ───────────────────────────────────────────────────────────────────
+
+def _inr(n):
+    try:
+        return f"₹{abs(float(n)):,.0f}"
+    except Exception:
+        return "₹0"
+
+
+def generate_weekly_html(settings, daily):
+    today = date.today()
+    week_start = today - timedelta(days=7)
+    week_start_str = week_start.isoformat()
+    today_str = today.isoformat()
+
+    week_data = {d: r for d, r in sorted(daily.items()) if week_start_str <= d <= today_str}
+    dates = sorted(week_data.keys())
+
+    sales_channels = settings.get("sales_channels", [])
+    out_channels = settings.get("outstanding_channels", [])
+
+    total_incoming = sum(r.get("incoming", 0) for r in week_data.values())
+    total_outgoing = sum(r.get("outgoing", 0) for r in week_data.values())
+    total_cogs = sum(r.get("cogs", 0) for r in week_data.values())
+    net = total_incoming - total_outgoing
+    total_sales = sum(sum(r.get("sales", {}).values()) for r in week_data.values())
+    sales_by_channel = {
+        ch: sum(r.get("sales", {}).get(ch, 0) for r in week_data.values())
+        for ch in sales_channels
+    }
+
+    latest_date = dates[-1] if dates else None
+    latest_outstanding = week_data[latest_date].get("outstanding", {}) if latest_date else {}
+    total_outstanding = sum(latest_outstanding.values())
+
+    net_color = "#10b981" if net >= 0 else "#ef4444"
+
+    def kpi_cell(label, value, color="#e2e8f0"):
+        return f"""<td width="33%" style="padding:4px;">
+          <div style="background:#16213e;border-radius:10px;padding:14px;border:1px solid #1f2d45;">
+            <div style="font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px;">{label}</div>
+            <div style="font-size:18px;font-weight:700;color:{color};">{value}</div>
+          </div></td>"""
+
+    daily_rows = ""
+    for d in reversed(dates):
+        r = week_data[d]
+        day_sales = sum(r.get("sales", {}).values())
+        daily_rows += f"""<tr>
+          <td style="padding:7px 10px;border-bottom:1px solid #1a2540;">{d}</td>
+          <td style="padding:7px 10px;border-bottom:1px solid #1a2540;text-align:right;color:#10b981;">{_inr(r.get('incoming',0))}</td>
+          <td style="padding:7px 10px;border-bottom:1px solid #1a2540;text-align:right;color:#ef4444;">{_inr(r.get('outgoing',0))}</td>
+          <td style="padding:7px 10px;border-bottom:1px solid #1a2540;text-align:right;">{_inr(r.get('cogs',0))}</td>
+          <td style="padding:7px 10px;border-bottom:1px solid #1a2540;text-align:right;">{_inr(day_sales)}</td>
+          <td style="padding:7px 10px;border-bottom:1px solid #1a2540;color:#64748b;">{r.get('notes','')}</td>
+        </tr>"""
+    if not daily_rows:
+        daily_rows = '<tr><td colspan="6" style="padding:16px;text-align:center;color:#64748b;">No data recorded this week.</td></tr>'
+
+    sales_rows = "".join(
+        f'<tr><td style="padding:6px 10px;">{ch}</td><td style="padding:6px 10px;text-align:right;">{_inr(val)}</td></tr>'
+        for ch, val in sales_by_channel.items()
+    )
+    outstanding_rows = "".join(
+        f'<tr><td style="padding:6px 10px;">{ch}</td><td style="padding:6px 10px;text-align:right;">{_inr(latest_outstanding.get(ch, 0))}</td></tr>'
+        for ch in out_channels
+    )
+
+    html = f"""<!DOCTYPE html>
+<html><head><meta charset="UTF-8"></head>
+<body style="margin:0;padding:0;background:#0d1117;font-family:'Segoe UI',Arial,sans-serif;color:#e2e8f0;">
+<div style="max-width:620px;margin:0 auto;padding:24px;">
+
+  <div style="background:#16213e;border-radius:12px;padding:20px 24px;margin-bottom:16px;border:1px solid #1f2d45;">
+    <table width="100%" cellpadding="0" cellspacing="0"><tr>
+      <td><div style="background:#6366f1;width:38px;height:38px;border-radius:8px;display:inline-block;text-align:center;line-height:38px;font-weight:700;font-size:13px;margin-right:12px;vertical-align:middle;">SG</div>
+        <span style="font-size:17px;font-weight:700;vertical-align:middle;">Space Goods</span>
+        <div style="font-size:12px;color:#64748b;margin-top:4px;">Weekly Cashflow Report &nbsp;·&nbsp; {week_start_str} to {today_str}</div>
+      </td>
+    </tr></table>
+  </div>
+
+  <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:16px;">
+    <tr>
+      {kpi_cell("Total Incoming", _inr(total_incoming), "#10b981")}
+      {kpi_cell("Total Outgoing", _inr(total_outgoing), "#ef4444")}
+      {kpi_cell("Net Cashflow", _inr(net), net_color)}
+    </tr>
+    <tr>
+      {kpi_cell("Total COGS", _inr(total_cogs))}
+      {kpi_cell("Total Sales", _inr(total_sales), "#a855f7")}
+      {kpi_cell("Total Outstanding", _inr(total_outstanding), "#f59e0b")}
+    </tr>
+  </table>
+
+  <table width="100%" cellpadding="0" cellspacing="8" style="margin-bottom:16px;">
+    <tr>
+      <td width="50%" style="padding-right:8px;vertical-align:top;">
+        <div style="background:#16213e;border-radius:10px;padding:16px;border:1px solid #1f2d45;">
+          <div style="font-size:13px;font-weight:600;color:#94a3b8;margin-bottom:10px;">Sales by Channel</div>
+          <table width="100%" cellpadding="0" cellspacing="0" style="font-size:13px;">
+            {sales_rows}
+            <tr style="border-top:1px solid #1f2d45;">
+              <td style="padding:7px 10px;font-weight:600;">Total</td>
+              <td style="padding:7px 10px;text-align:right;font-weight:600;">{_inr(total_sales)}</td>
+            </tr>
+          </table>
+        </div>
+      </td>
+      <td width="50%" style="padding-left:8px;vertical-align:top;">
+        <div style="background:#16213e;border-radius:10px;padding:16px;border:1px solid #1f2d45;">
+          <div style="font-size:13px;font-weight:600;color:#94a3b8;margin-bottom:10px;">Outstanding (as of {latest_date or 'N/A'})</div>
+          <table width="100%" cellpadding="0" cellspacing="0" style="font-size:13px;">
+            {outstanding_rows}
+            <tr style="border-top:1px solid #1f2d45;">
+              <td style="padding:7px 10px;font-weight:600;">Total</td>
+              <td style="padding:7px 10px;text-align:right;font-weight:600;">{_inr(total_outstanding)}</td>
+            </tr>
+          </table>
+        </div>
+      </td>
+    </tr>
+  </table>
+
+  <div style="background:#16213e;border-radius:10px;padding:16px;border:1px solid #1f2d45;margin-bottom:16px;">
+    <div style="font-size:13px;font-weight:600;color:#94a3b8;margin-bottom:10px;">Daily Breakdown</div>
+    <table width="100%" cellpadding="0" cellspacing="0" style="font-size:12px;border-collapse:collapse;">
+      <tr style="color:#64748b;">
+        <th style="padding:7px 10px;text-align:left;font-weight:500;">Date</th>
+        <th style="padding:7px 10px;text-align:right;font-weight:500;">Incoming</th>
+        <th style="padding:7px 10px;text-align:right;font-weight:500;">Outgoing</th>
+        <th style="padding:7px 10px;text-align:right;font-weight:500;">COGS</th>
+        <th style="padding:7px 10px;text-align:right;font-weight:500;">Sales</th>
+        <th style="padding:7px 10px;text-align:left;font-weight:500;">Notes</th>
+      </tr>
+      {daily_rows}
+    </table>
+  </div>
+
+  <div style="text-align:center;color:#374151;font-size:11px;padding-top:4px;">
+    Generated by Space Goods Cashflow Dashboard &nbsp;·&nbsp; {datetime.now().strftime("%d %b %Y, %I:%M %p")}
+  </div>
+</div>
+</body></html>"""
+    return html
+
+
+def last_sunday_6pm():
+    now = datetime.now()
+    days_since_sunday = (now.weekday() + 1) % 7
+    last_sunday = now.date() - timedelta(days=days_since_sunday)
+    t = datetime(last_sunday.year, last_sunday.month, last_sunday.day, 18, 0, 0)
+    if t > now:
+        t -= timedelta(days=7)
+    return t
+
+
+def check_missed_email():
+    settings = get_settings()
+    if not settings.get("email_enabled"):
+        return
+    last_sent = settings.get("email_last_sent")
+    threshold = last_sunday_6pm()
+    if last_sent and datetime.fromisoformat(last_sent) >= threshold:
+        return
+    send_weekly_email()
+
+
+def send_weekly_email():
+    settings = get_settings()
+    if not settings.get("email_enabled"):
+        return False, "Weekly email is not enabled."
+
+    sender = settings.get("email_sender", "").strip()
+    password = settings.get("email_password", "").replace(" ", "").strip()
+    recipients = [r.strip() for r in settings.get("email_recipient", "").split(",") if r.strip()]
+
+    if not all([sender, password, recipients]):
+        return False, "Email settings are incomplete. Please fill in sender, password, and recipient."
+
+    daily = load_json(DAILY_FILE, {})
+    html = generate_weekly_html(settings, daily)
+
+    subject = f"Weekly Cashflow Report — {datetime.now().strftime('%d %b %Y')}"
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"] = sender
+    msg["To"] = ", ".join(recipients)
+    msg.attach(MIMEText(html, "html"))
+
+    try:
+        context = ssl.create_default_context()
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=context) as server:
+            server.login(sender, password)
+            server.sendmail(sender, recipients, msg.as_string())
+        settings["email_last_sent"] = datetime.now().isoformat()
+        save_json(SETTINGS_FILE, settings)
+        return True, "Email sent successfully."
+    except Exception as e:
+        return False, str(e)
+
+
 # ── Routes ──────────────────────────────────────────────────────────────────
 
 
@@ -92,11 +309,25 @@ def api_get_settings():
 def api_update_settings():
     settings = get_settings()
     data = request.json or {}
-    for key in ["sales_channels", "outstanding_channels", "custom_columns", "delete_password"]:
+    updatable = [
+        "sales_channels", "outstanding_channels", "custom_columns", "delete_password",
+        "email_enabled", "email_sender", "email_password", "email_recipient",
+    ]
+    for key in updatable:
         if key in data:
             settings[key] = data[key]
+    if "email_password" in data:
+        settings["email_password"] = data["email_password"].replace(" ", "").strip()
     save_json(SETTINGS_FILE, settings)
     return jsonify({"success": True})
+
+
+@app.route("/api/send-test-email", methods=["POST"])
+def api_send_test_email():
+    success, message = send_weekly_email()
+    if success:
+        return jsonify({"success": True, "message": message})
+    return jsonify({"error": message}), 400
 
 
 @app.route("/api/data", methods=["GET"])
@@ -344,8 +575,76 @@ def api_template():
     )
 
 
+@app.route("/api/backup", methods=["POST"])
+def api_create_backup():
+    ensure_dirs()
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"backup_{timestamp}.zip"
+    filepath = os.path.join(BACKUP_DIR, filename)
+
+    files = [
+        (DAILY_FILE, "daily_data.json"),
+        (SETTINGS_FILE, "settings.json"),
+        (AUDIT_FILE, "audit_log.json"),
+    ]
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for path, arcname in files:
+            if os.path.exists(path):
+                zf.write(path, arcname)
+    buf.seek(0)
+
+    with open(filepath, "wb") as f:
+        f.write(buf.read())
+
+    return jsonify({"success": True, "filename": filename})
+
+
+@app.route("/api/backups", methods=["GET"])
+def api_list_backups():
+    ensure_dirs()
+    files = sorted(
+        [f for f in os.listdir(BACKUP_DIR) if f.endswith(".zip")],
+        reverse=True,
+    )
+    result = []
+    for f in files:
+        stat = os.stat(os.path.join(BACKUP_DIR, f))
+        result.append({
+            "filename": f,
+            "size_kb": round(stat.st_size / 1024, 1),
+            "created_at": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+        })
+    return jsonify(result)
+
+
+@app.route("/api/backup/<filename>", methods=["GET"])
+def api_download_backup(filename):
+    safe = os.path.basename(filename)
+    filepath = os.path.join(BACKUP_DIR, safe)
+    if not os.path.exists(filepath):
+        return jsonify({"error": "Not found"}), 404
+    return send_file(filepath, as_attachment=True, download_name=safe)
+
+
 if __name__ == "__main__":
     ensure_dirs()
+
+    # Start scheduler only in the main process (not the reloader child)
+    if not app.debug or os.environ.get("WERKZEUG_RUN_MAIN") == "true":
+        import threading
+        scheduler = BackgroundScheduler()
+        scheduler.add_job(
+            send_weekly_email,
+            CronTrigger(day_of_week="sun", hour=18, minute=0),
+            id="weekly_report",
+            replace_existing=True,
+        )
+        scheduler.start()
+        atexit.register(lambda: scheduler.shutdown(wait=False))
+        threading.Timer(5, check_missed_email).start()
+
     print("\n  Space Goods Cashflow Dashboard")
     print("  Running at http://localhost:5000\n")
     app.run(debug=True, host="0.0.0.0", port=5000)

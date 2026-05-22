@@ -247,6 +247,50 @@
           <button class="btn btn-primary btn-sm" id="savePasswordBtn">Update Password</button>
           <div id="passwordMsg" class="msg hidden" style="margin-top:0.5rem"></div>
         </div>
+
+        <!-- Data backup -->
+        <div class="settings-card wide">
+          <h3>Data Backup</h3>
+          <p class="settings-hint">Creates a ZIP of all data files (daily data, settings, audit log) saved on the server.</p>
+          <div style="display:flex;gap:0.75rem;align-items:center;margin-bottom:1rem;">
+            <button class="btn btn-primary btn-sm" id="createBackupBtn">Create Backup Now</button>
+            <div id="backupMsg" class="msg hidden"></div>
+          </div>
+          <div id="backupList"></div>
+        </div>
+
+        <!-- Weekly email report -->
+        <div class="settings-card wide">
+          <h3>Weekly Email Report</h3>
+          <p class="settings-hint">Sends an HTML cashflow summary every <strong>Sunday at 6 PM</strong>. Requires a Gmail account with a <a href="https://myaccount.google.com/apppasswords" target="_blank" style="color:var(--accent);">Gmail App Password</a> (not your regular password).</p>
+          <div class="form-grid">
+            <div class="form-group">
+              <label>Enable weekly report</label>
+              <label class="toggle-label" style="margin-top:0.5rem;display:flex;align-items:center;gap:0.5rem;cursor:pointer;">
+                <input type="checkbox" id="emailEnabled" />
+                <span>Send every Sunday at 6 PM</span>
+              </label>
+            </div>
+            <div class="form-group">
+              <label>Sender Gmail address</label>
+              <input type="email" id="emailSender" placeholder="yourname@gmail.com" autocomplete="off" />
+            </div>
+            <div class="form-group">
+              <label>Gmail App Password</label>
+              <input type="password" id="emailPassword" placeholder="Leave blank to keep existing" autocomplete="new-password" />
+            </div>
+            <div class="form-group">
+              <label>Recipient emails</label>
+              <input type="text" id="emailRecipient" placeholder="one@example.com, two@example.com" autocomplete="off" />
+            </div>
+          </div>
+          <div style="display:flex;gap:0.75rem;align-items:center;flex-wrap:wrap;margin-top:0.75rem;">
+            <button class="btn btn-primary btn-sm" id="saveEmailSettingsBtn">Save Email Settings</button>
+            <button class="btn btn-outline btn-sm" id="sendTestEmailBtn">Send Test Now</button>
+            <span id="emailLastSent" style="font-size:12px;color:var(--text-muted);"></span>
+          </div>
+          <div id="emailMsg" class="msg hidden" style="margin-top:0.5rem"></div>
+        </div>
       </div>
     </section>
 
