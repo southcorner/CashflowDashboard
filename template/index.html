@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Space Goods — Cashflow Dashboard</title>
+  <link rel="stylesheet" href="/static/css/style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+</head>
+<body>
+  <!-- Sidebar -->
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-icon">SG</div>
+      <div>
+        <div class="brand-name">Space Goods</div>
+        <div class="brand-sub">Cashflow Dashboard</div>
+      </div>
+    </div>
+    <nav class="nav">
+      <a class="nav-item active" data-tab="dashboard">
+        <span class="nav-icon">◈</span> Dashboard
+      </a>
+      <a class="nav-item" data-tab="entry">
+        <span class="nav-icon">✦</span> Enter Data
+      </a>
+      <a class="nav-item" data-tab="reports">
+        <span class="nav-icon">▤</span> Reports
+      </a>
+      <a class="nav-item" data-tab="settings">
+        <span class="nav-icon">⚙</span> Settings
+      </a>
+      <a class="nav-item" data-tab="audit">
+        <span class="nav-icon">⏱</span> Audit Log
+      </a>
+    </nav>
+    <div class="sidebar-footer">
+      <button class="btn btn-outline btn-sm" id="importBtn">↑ Import Excel</button>
+      <a class="btn btn-outline btn-sm" href="/api/template" download>↓ Template</a>
+      <input type="file" id="importFile" accept=".xlsx,.xls" style="display:none" />
+    </div>
+  </aside>
+
+  <!-- Main content -->
+  <main class="main">
+    <!-- ── DASHBOARD TAB ── -->
+    <section id="tab-dashboard" class="tab active">
+      <div class="page-header">
+        <div>
+          <h1 class="page-title">Dashboard</h1>
+          <p class="page-sub" id="lastUpdated">Loading…</p>
+        </div>
+        <div class="header-actions">
+          <select id="dashFilter" class="select-sm">
+            <option value="7">Last 7 days</option>
+            <option value="30" selected>Last 30 days</option>
+            <option value="90">Last 90 days</option>
+            <option value="365">Last 365 days</option>
+            <option value="0">All time</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="kpi-grid" id="kpiGrid">
+        <div class="kpi-card skeleton"></div>
+        <div class="kpi-card skeleton"></div>
+        <div class="kpi-card skeleton"></div>
+        <div class="kpi-card skeleton"></div>
+        <div class="kpi-card skeleton"></div>
+      </div>
+
+      <div class="charts-grid">
+        <div class="chart-card wide">
+          <div class="chart-card-header">
+            <h3>Cash Flow</h3>
+            <span class="chart-legend">
+              <span class="legend-dot green"></span>Incoming
+              <span class="legend-dot red"></span>Outgoing
+              <span class="legend-dot orange"></span>COGS
+            </span>
+          </div>
+          <canvas id="cashflowChart" height="100"></canvas>
+        </div>
+        <div class="chart-card">
+          <div class="chart-card-header"><h3>Outstanding Balances</h3></div>
+          <canvas id="outstandingChart" height="180"></canvas>
+        </div>
+        <div class="chart-card wide">
+          <div class="chart-card-header"><h3>Sales by Channel</h3></div>
+          <canvas id="salesChart" height="100"></canvas>
+        </div>
+        <div class="chart-card">
+          <div class="chart-card-header"><h3>Running Balance</h3></div>
+          <canvas id="balanceChart" height="180"></canvas>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── DATA ENTRY TAB ── -->
+    <section id="tab-entry" class="tab">
+      <div class="page-header">
+        <div>
+          <h1 class="page-title">Enter Daily Data</h1>
+          <p class="page-sub">Data for an existing date will be overwritten (original is archived).</p>
+        </div>
+      </div>
+      <div class="form-container">
+        <form id="entryForm">
+          <div class="form-section">
+            <h3 class="form-section-title">Date & Bank</h3>
+            <div class="form-grid">
+              <div class="form-group">
+                <label>Date <span class="req">*</span></label>
+                <input type="date" name="date" id="entryDate" required />
+              </div>
+              <div class="form-group">
+                <label>Starting Balance (₹)</label>
+                <input type="number" name="starting_balance" step="0.01" placeholder="0" />
+              </div>
+            </div>
+          </div>
+
+          <div class="form-section">
+            <h3 class="form-section-title">Daily Transactions</h3>
+            <div class="form-grid">
+              <div class="form-group">
+                <label>Incoming (₹)</label>
+                <input type="number" name="incoming" step="0.01" placeholder="0" />
+              </div>
+              <div class="form-group">
+                <label>Outgoing / Expenses (₹)</label>
+                <input type="number" name="outgoing" step="0.01" placeholder="0" />
+              </div>
+              <div class="form-group">
+                <label>Cost of Goods Sold — COGS (₹)</label>
+                <input type="number" name="cogs" step="0.01" placeholder="0" />
+              </div>
+            </div>
+          </div>
+
+          <div class="form-section">
+            <h3 class="form-section-title">Sales by Channel (₹)</h3>
+            <div class="form-grid" id="salesFields"></div>
+          </div>
+
+          <div class="form-section">
+            <h3 class="form-section-title">Outstanding Balances (₹)</h3>
+            <div class="form-grid" id="outstandingFields"></div>
+          </div>
+
+          <div class="form-section">
+            <h3 class="form-section-title">Notes</h3>
+            <div class="form-group full-width">
+              <textarea name="notes" rows="3" placeholder="Optional notes for this day…"></textarea>
+            </div>
+          </div>
+
+          <div class="form-actions">
+            <button type="button" class="btn btn-outline" id="clearFormBtn">Clear</button>
+            <button type="submit" class="btn btn-primary">Save Entry</button>
+          </div>
+        </form>
+        <div id="entryMsg" class="msg hidden"></div>
+      </div>
+    </section>
+
+    <!-- ── REPORTS TAB ── -->
+    <section id="tab-reports" class="tab">
+      <div class="page-header">
+        <div>
+          <h1 class="page-title">Reports</h1>
+        </div>
+        <div class="header-actions">
+          <label class="toggle-label">
+            <input type="checkbox" id="lifetimeToggle" /> All time
+          </label>
+          <input type="date" id="reportStart" class="input-sm" />
+          <span>→</span>
+          <input type="date" id="reportEnd" class="input-sm" />
+          <button class="btn btn-primary btn-sm" id="exportBtn">↓ Export Excel</button>
+        </div>
+      </div>
+
+      <div class="summary-bar" id="reportSummary"></div>
+
+      <div class="table-wrap">
+        <table class="data-table" id="reportTable">
+          <thead id="reportHead"></thead>
+          <tbody id="reportBody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ── SETTINGS TAB ── -->
+    <section id="tab-settings" class="tab">
+      <div class="page-header">
+        <h1 class="page-title">Settings</h1>
+      </div>
+
+      <div class="settings-grid">
+        <!-- Sales channels -->
+        <div class="settings-card">
+          <h3>Sales Channels</h3>
+          <div class="tag-list" id="salesChannelTags"></div>
+          <div class="tag-add">
+            <input type="text" id="newSalesChannel" placeholder="New channel name" />
+            <button class="btn btn-primary btn-sm" id="addSalesChannelBtn">Add</button>
+          </div>
+        </div>
+
+        <!-- Outstanding channels -->
+        <div class="settings-card">
+          <h3>Outstanding Channels</h3>
+          <div class="tag-list" id="outstandingChannelTags"></div>
+          <div class="tag-add">
+            <input type="text" id="newOutstandingChannel" placeholder="New channel name" />
+            <button class="btn btn-primary btn-sm" id="addOutstandingChannelBtn">Add</button>
+          </div>
+        </div>
+
+        <!-- Custom formula column -->
+        <div class="settings-card wide">
+          <h3>Custom Formula Columns</h3>
+          <p class="settings-hint">
+            Variables you can use: <code>incoming</code>, <code>outgoing</code>, <code>cogs</code>,
+            <code>starting_balance</code>, <code>total_sales</code>, <code>total_outstanding</code>,
+            plus channel names with spaces replaced by underscores (e.g. <code>AMZ_PO</code>).
+          </p>
+          <div id="customColsList"></div>
+          <div class="custom-col-form">
+            <input type="text" id="newColName" placeholder="Column name (e.g. Gross Profit)" />
+            <input type="text" id="newColFormula" placeholder="Formula (e.g. incoming - outgoing - cogs)" />
+            <button class="btn btn-primary btn-sm" id="addCustomColBtn">Add Column</button>
+          </div>
+        </div>
+
+        <!-- Delete password -->
+        <div class="settings-card">
+          <h3>Delete Password</h3>
+          <p class="settings-hint">Password required to delete daily entries.</p>
+          <div class="form-group">
+            <input type="password" id="newPassword" placeholder="New password" autocomplete="new-password" />
+          </div>
+          <div class="form-group">
+            <input type="password" id="confirmPassword" placeholder="Confirm password" autocomplete="new-password" />
+          </div>
+          <button class="btn btn-primary btn-sm" id="savePasswordBtn">Update Password</button>
+          <div id="passwordMsg" class="msg hidden" style="margin-top:0.5rem"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── AUDIT LOG TAB ── -->
+    <section id="tab-audit" class="tab">
+      <div class="page-header">
+        <h1 class="page-title">Audit Log</h1>
+        <p class="page-sub">Original copies of all overwritten or deleted entries.</p>
+      </div>
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Timestamp</th><th>Action</th><th>Date</th>
+              <th>Starting Bal</th><th>Incoming</th><th>Outgoing</th><th>COGS</th><th>Notes</th>
+            </tr>
+          </thead>
+          <tbody id="auditBody"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <!-- Delete modal -->
+  <div id="deleteModal" class="modal hidden">
+    <div class="modal-box">
+      <h3>Delete Entry</h3>
+      <p>Enter the delete password to remove <strong id="deleteDate"></strong>.</p>
+      <input type="password" id="deletePassword" placeholder="Password" />
+      <div class="modal-actions">
+        <button class="btn btn-outline" id="deleteCancelBtn">Cancel</button>
+        <button class="btn btn-danger" id="deleteConfirmBtn">Delete</button>
+      </div>
+      <div id="deleteMsg" class="msg hidden"></div>
+    </div>
+  </div>
+
+  <!-- Toast -->
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="/static/js/app.js"></script>
+</body>
+</html>
