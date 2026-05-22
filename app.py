@@ -309,6 +309,10 @@ def api_get_settings():
 def api_update_settings():
     settings = get_settings()
     data = request.json or {}
+    if "delete_password" in data:
+        if data.get("current_delete_password") != settings.get("delete_password"):
+            return jsonify({"error": "Current password is incorrect."}), 403
+
     updatable = [
         "sales_channels", "outstanding_channels", "custom_columns", "delete_password",
         "email_enabled", "email_sender", "email_password", "email_recipient",

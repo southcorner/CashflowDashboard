@@ -2,6 +2,7 @@
 
 // ── State ──────────────────────────────────────────────────────────────────
 let state = { data: {}, settings: {}, audit: [] };
+const rpt = { sort: { col: null, dir: "asc" }, hidden: new Set(), filters: [] };
 let charts = {};
 
 // ── Utilities ──────────────────────────────────────────────────────────────
@@ -417,89 +418,212 @@ function collectEntryForm() {
 }
 
 // ── Reports ────────────────────────────────────────────────────────────────
-function renderReports() {
-  const start = document.getElementById("reportStart").value;
-  const end = document.getElementById("reportEnd").value;
+
+function getReportCols() {
+  const sc = state.settings.sales_channels  || [];
+  const oc = state.settings.outstanding_channels || [];
+  const cc = state.settings.custom_columns  || [];
+  return [
+    { key: "date",              label: "Date",         type: "text" },
+    { key: "starting_balance",  label: "Starting Bal", type: "num"  },
+    { key: "incoming",          label: "Incoming",     type: "num"  },
+    { key: "outgoing",          label: "Outgoing",     type: "num"  },
+    { key: "cogs",              label: "COGS",         type: "num"  },
+    ...sc.map(ch => ({ key: `s:${ch}`,    label: ch,          type: "num", g: "sales",  ch })),
+    { key: "total_sales",       label: "Total Sales",  type: "num"  },
+    ...oc.map(ch => ({ key: `o:${ch}`,    label: `${ch} O/S`, type: "num", g: "outstd", ch })),
+    { key: "total_outstanding", label: "Total O/S",    type: "num"  },
+    ...cc.map(c  => ({ key: `c:${c.name}`, label: c.name,     type: "num", g: "custom", ch: c.name })),
+    { key: "notes",             label: "Notes",        type: "text" },
+  ];
+}
+
+function rowVal(date, row, col) {
+  switch (col.key) {
+    case "date":              return date;
+    case "starting_balance":  return +(row.starting_balance  || 0);
+    case "incoming":          return +(row.incoming           || 0);
+    case "outgoing":          return +(row.outgoing           || 0);
+    case "cogs":              return +(row.cogs               || 0);
+    case "total_sales":       return Object.values(row.sales       || {}).reduce((a,b)=>a+b, 0);
+    case "total_outstanding": return Object.values(row.outstanding || {}).reduce((a,b)=>a+b, 0);
+    default:
+      if (col.g === "sales")  return +((row.sales       || {})[col.ch] || 0);
+      if (col.g === "outstd") return +((row.outstanding || {})[col.ch] || 0);
+      if (col.g === "custom") return +((row.custom      || {})[col.ch] ?? 0);
+      return "";
+  }
+}
+
+function getFilteredSortedEntries(data, cols) {
+  let entries = Object.entries(data).map(([date, row]) => ({ date, row }));
+
+  for (const f of rpt.filters) {
+    const col = cols.find(c => c.key === f.colKey);
+    if (!col) continue;
+    entries = entries.filter(({ date, row }) => {
+      const v = +rowVal(date, row, col);
+      return f.op === ">=" ? v >= f.val : v < f.val;
+    });
+  }
+
+  if (rpt.sort.col) {
+    const col = cols.find(c => c.key === rpt.sort.col);
+    if (col) {
+      entries.sort((a, b) => {
+        const va = rowVal(a.date, a.row, col);
+        const vb = rowVal(b.date, b.row, col);
+        const cmp = va < vb ? -1 : va > vb ? 1 : 0;
+        return rpt.sort.dir === "asc" ? cmp : -cmp;
+      });
+    }
+  } else {
+    entries.sort((a, b) => b.date.localeCompare(a.date));
+  }
+  return entries;
+}
+
+function renderReportTable(cols, entries) {
+  const vis = cols.filter(c => !rpt.hidden.has(c.key));
+
+  document.getElementById("reportHead").innerHTML = `<tr>
+    ${vis.map(col => {
+      const sorted = rpt.sort.col === col.key;
+      const arrow  = sorted ? `<span class="sort-arrow">${rpt.sort.dir === "asc" ? "↑" : "↓"}</span>` : "";
+      return `<th class="${col.type === "num" ? "num " : ""}sortable${sorted ? " sorted" : ""}" data-col="${col.key}">
+        ${col.label}${arrow}
+      </th>`;
+    }).join("")}
+    <th></th>
+  </tr>`;
+
+  const body = document.getElementById("reportBody");
+  if (!entries.length) {
+    body.innerHTML = `<tr><td colspan="99" style="text-align:center;padding:2rem;color:var(--text-muted)">No rows match the current filters.</td></tr>`;
+    return;
+  }
+
+  body.innerHTML = entries.map(({ date, row }) => `<tr>
+    ${vis.map(col => {
+      const v = rowVal(date, row, col);
+      if (col.key === "date")  return `<td class="date-cell">${date}</td>`;
+      if (col.key === "notes") return `<td>${row.notes || ""}</td>`;
+      let cls = "num";
+      if      (col.key === "incoming") cls += " positive";
+      else if (col.key === "outgoing") cls += " negative";
+      else if (col.g === "custom" && typeof v === "number") cls += v >= 0 ? " positive" : " negative";
+      return `<td class="${cls}">${fmt(v)}</td>`;
+    }).join("")}
+    <td><button class="btn-icon" title="Delete" onclick="openDeleteModal('${date}')">✕</button></td>
+  </tr>`).join("");
+}
+
+function refreshReportTable() {
+  const cols     = getReportCols();
+  const start    = document.getElementById("reportStart").value;
+  const end      = document.getElementById("reportEnd").value;
   const lifetime = document.getElementById("lifetimeToggle").checked;
+  const data     = lifetime ? state.data : filterByRange(state.data, start, end);
+  renderReportTable(cols, getFilteredSortedEntries(data, cols));
+}
 
+function renderFilterChips() {
+  const el = document.getElementById("filterChips");
+  if (!el) return;
+  const cols = getReportCols();
+  el.innerHTML = rpt.filters.map((f, i) => {
+    const col = cols.find(c => c.key === f.colKey);
+    return `<span class="filter-chip">${col ? col.label : f.colKey} ${f.op} ${f.val.toLocaleString("en-IN")}
+      <button onclick="removeFilter(${i})">✕</button></span>`;
+  }).join("");
+}
+
+window.removeFilter = function(i) {
+  rpt.filters.splice(i, 1);
+  renderFilterChips();
+  refreshReportTable();
+};
+
+function renderReports() {
+  const start    = document.getElementById("reportStart").value;
+  const end      = document.getElementById("reportEnd").value;
+  const lifetime = document.getElementById("lifetimeToggle").checked;
   const filtered = lifetime ? state.data : filterByRange(state.data, start, end);
-  const dates = sortedDates(filtered);
+  const dates    = sortedDates(filtered);
+  const cols     = getReportCols();
 
-  const salesChs = state.settings.sales_channels || [];
-  const outChs = state.settings.outstanding_channels || [];
-  const custCols = state.settings.custom_columns || [];
-
-  // Summary bar
-  const totalIn = dates.reduce((s, d) => s + (filtered[d].incoming || 0), 0);
-  const totalOut = dates.reduce((s, d) => s + (filtered[d].outgoing || 0), 0);
-  const totalCogs = dates.reduce((s, d) => s + (filtered[d].cogs || 0), 0);
-  const totalSales = dates.reduce((s, d) => s + Object.values(filtered[d].sales || {}).reduce((a, b) => a + b, 0), 0);
+  // Summary (uses date-range data, unaffected by row filters)
+  const totalIn    = dates.reduce((s,d) => s + (filtered[d].incoming || 0), 0);
+  const totalOut   = dates.reduce((s,d) => s + (filtered[d].outgoing || 0), 0);
+  const totalCogs  = dates.reduce((s,d) => s + (filtered[d].cogs     || 0), 0);
+  const totalSales = dates.reduce((s,d) => s + Object.values(filtered[d].sales || {}).reduce((a,b)=>a+b,0), 0);
 
   document.getElementById("reportSummary").innerHTML = `
     <div class="summary-item">Entries <strong>${dates.length}</strong></div>
     <div class="summary-item">Total Incoming <strong>${fmt(totalIn)}</strong></div>
     <div class="summary-item">Total Outgoing <strong>${fmt(totalOut)}</strong></div>
     <div class="summary-item">Total COGS <strong>${fmt(totalCogs)}</strong></div>
-    <div class="summary-item">Net Cashflow <strong style="color:${totalIn - totalOut >= 0 ? "var(--green)" : "var(--red)"}">${fmtSigned(totalIn - totalOut)}</strong></div>
+    <div class="summary-item">Net Cashflow <strong style="color:${totalIn-totalOut>=0?"var(--green)":"var(--red)"}">${fmtSigned(totalIn-totalOut)}</strong></div>
     <div class="summary-item">Total Sales <strong>${fmt(totalSales)}</strong></div>
   `;
 
-  // Table headers
-  const head = document.getElementById("reportHead");
-  head.innerHTML = `<tr>
-    <th>Date</th>
-    <th class="num">Starting Bal</th>
-    <th class="num">Incoming</th>
-    <th class="num">Outgoing</th>
-    <th class="num">COGS</th>
-    ${salesChs.map((c) => `<th class="num">${c}</th>`).join("")}
-    <th class="num">Total Sales</th>
-    ${outChs.map((c) => `<th class="num">${c} O/S</th>`).join("")}
-    <th class="num">Total O/S</th>
-    ${custCols.map((c) => `<th class="num">${c.name}</th>`).join("")}
-    <th>Notes</th>
-    <th></th>
-  </tr>`;
+  // Controls toolbar
+  const numCols = cols.filter(c => c.type === "num");
+  document.getElementById("reportControls").innerHTML = `
+    <div class="report-controls">
+      <div class="filter-form">
+        <label>Filter</label>
+        <select id="filterColSel" class="select-sm">
+          ${numCols.map(c => `<option value="${c.key}">${c.label}</option>`).join("")}
+        </select>
+        <select id="filterOpSel" class="select-sm">
+          <option value=">=">≥ at least</option>
+          <option value="<">&lt; less than</option>
+        </select>
+        <input type="number" id="filterValInput" class="input-sm" placeholder="0" style="width:88px" />
+        <button class="btn btn-outline btn-sm" id="addFilterBtn">+ Add</button>
+      </div>
+      <div class="filter-chips" id="filterChips"></div>
+      <div class="col-toggle-wrap">
+        <button class="btn btn-outline btn-sm" id="colToggleBtn">Columns ▾</button>
+        <div class="col-dropdown hidden" id="colDropdown">
+          ${cols.map(c => `<label class="col-check-item">
+            <input type="checkbox" data-col="${c.key}" ${!rpt.hidden.has(c.key) ? "checked" : ""} />${c.label}
+          </label>`).join("")}
+        </div>
+      </div>
+    </div>`;
 
-  // Table body
-  const body = document.getElementById("reportBody");
-  if (!dates.length) {
-    body.innerHTML = `<tr><td colspan="99" style="text-align:center;padding:2rem;color:var(--text-muted)">No data for selected period.</td></tr>`;
-    return;
-  }
+  renderFilterChips();
 
-  body.innerHTML = dates
-    .reverse()
-    .map((date) => {
-      const r = filtered[date];
-      const sales = r.sales || {};
-      const outstanding = r.outstanding || {};
-      const custom = r.custom || {};
-      const totalSalesRow = Object.values(sales).reduce((a, b) => a + b, 0);
-      const totalOsRow = Object.values(outstanding).reduce((a, b) => a + b, 0);
-      const net = (r.incoming || 0) - (r.outgoing || 0);
+  document.getElementById("addFilterBtn").addEventListener("click", () => {
+    const colKey = document.getElementById("filterColSel").value;
+    const op     = document.getElementById("filterOpSel").value;
+    const val    = parseFloat(document.getElementById("filterValInput").value);
+    if (isNaN(val)) { document.getElementById("filterValInput").focus(); return; }
+    rpt.filters.push({ colKey, op, val });
+    document.getElementById("filterValInput").value = "";
+    renderFilterChips();
+    refreshReportTable();
+  });
 
-      return `<tr>
-        <td class="date-cell">${date}</td>
-        <td class="num">${fmt(r.starting_balance)}</td>
-        <td class="num positive">${fmt(r.incoming)}</td>
-        <td class="num negative">${fmt(r.outgoing)}</td>
-        <td class="num">${fmt(r.cogs)}</td>
-        ${salesChs.map((c) => `<td class="num">${fmt(sales[c] || 0)}</td>`).join("")}
-        <td class="num"><strong>${fmt(totalSalesRow)}</strong></td>
-        ${outChs.map((c) => `<td class="num">${fmt(outstanding[c] || 0)}</td>`).join("")}
-        <td class="num">${fmt(totalOsRow)}</td>
-        ${custCols.map((c) => {
-          const v = custom[c.name];
-          return `<td class="num ${typeof v === "number" ? (v >= 0 ? "positive" : "negative") : ""}">${fmt(v)}</td>`;
-        }).join("")}
-        <td>${r.notes || ""}</td>
-        <td>
-          <button class="btn-icon" title="Delete" onclick="openDeleteModal('${date}')">✕</button>
-        </td>
-      </tr>`;
-    })
-    .join("");
+  document.getElementById("filterValInput").addEventListener("keydown", e => {
+    if (e.key === "Enter") document.getElementById("addFilterBtn").click();
+  });
+
+  document.getElementById("colToggleBtn").addEventListener("click", e => {
+    e.stopPropagation();
+    document.getElementById("colDropdown").classList.toggle("hidden");
+  });
+
+  document.querySelectorAll("#colDropdown input[type=checkbox]").forEach(cb => {
+    cb.addEventListener("change", () => {
+      cb.checked ? rpt.hidden.delete(cb.dataset.col) : rpt.hidden.add(cb.dataset.col);
+      refreshReportTable();
+    });
+  });
+
+  renderReportTable(cols, getFilteredSortedEntries(filtered, cols));
 }
 
 // ── Settings ───────────────────────────────────────────────────────────────
@@ -729,15 +853,26 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   // Settings: update password
   document.getElementById("savePasswordBtn").addEventListener("click", async () => {
+    const current = document.getElementById("currentPassword").value;
     const np = document.getElementById("newPassword").value;
     const cp = document.getElementById("confirmPassword").value;
-    if (!np) { showMsg("passwordMsg", "Enter a new password.", "error"); return; }
-    if (np !== cp) { showMsg("passwordMsg", "Passwords do not match.", "error"); return; }
-    state.settings.delete_password = np;
-    await saveSettings();
-    document.getElementById("newPassword").value = "";
-    document.getElementById("confirmPassword").value = "";
-    showMsg("passwordMsg", "Password updated.", "success");
+    if (!current) { showMsg("passwordMsg", "Enter your current password.", "error"); return; }
+    if (!np)      { showMsg("passwordMsg", "Enter a new password.", "error"); return; }
+    if (np !== cp) { showMsg("passwordMsg", "New passwords do not match.", "error"); return; }
+
+    const res = await api("/api/settings", {
+      method: "POST",
+      body: JSON.stringify({ current_delete_password: current, delete_password: np }),
+    });
+    if (res.success) {
+      document.getElementById("currentPassword").value = "";
+      document.getElementById("newPassword").value = "";
+      document.getElementById("confirmPassword").value = "";
+      showMsg("passwordMsg", "Password updated.", "success");
+      await loadAll();
+    } else {
+      showMsg("passwordMsg", res.error || "Failed.", "error");
+    }
   });
 
   // Import Excel
@@ -828,6 +963,29 @@ document.addEventListener("DOMContentLoaded", async () => {
       renderSettings();
     } else {
       showMsg("emailMsg", res.error || "Failed to save.", "error");
+    }
+  });
+
+  // Reports: sort by column header
+  document.getElementById("reportHead").addEventListener("click", e => {
+    const th = e.target.closest("th[data-col]");
+    if (!th) return;
+    const key = th.dataset.col;
+    if (rpt.sort.col === key && rpt.sort.dir === "desc") {
+      rpt.sort.col = null; rpt.sort.dir = "asc";
+    } else if (rpt.sort.col === key) {
+      rpt.sort.dir = "desc";
+    } else {
+      rpt.sort.col = key; rpt.sort.dir = "asc";
+    }
+    refreshReportTable();
+  });
+
+  // Close column dropdown when clicking outside
+  document.addEventListener("click", e => {
+    const dd = document.getElementById("colDropdown");
+    if (dd && !dd.classList.contains("hidden") && !dd.parentElement.contains(e.target)) {
+      dd.classList.add("hidden");
     }
   });
 
