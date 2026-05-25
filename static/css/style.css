@@ -651,6 +651,191 @@ hr { border: none; border-top: 1px solid var(--border); margin: 1.5rem 0; }
 .data-table th.sorted { color: var(--accent) !important; }
 .sort-arrow { font-size: 10px; margin-left: 3px; }
 
+/* ── Sidebar user strip ──────────────────────────────────── */
+.sidebar-user {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--border);
+}
+.sidebar-username {
+  font-size: 12px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.btn-logout {
+  font-size: 15px;
+  color: var(--text-muted);
+  text-decoration: none;
+  padding: 2px 4px;
+  border-radius: 4px;
+  transition: color 0.15s;
+  flex-shrink: 0;
+}
+.btn-logout:hover { color: var(--red); }
+
+/* ── User management rows ────────────────────────────────── */
+.user-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.45rem 0;
+  border-bottom: 1px solid var(--border);
+}
+.user-row:last-child { border-bottom: none; }
+.user-name { font-size: 13px; flex: 1; }
+.user-badge {
+  font-size: 10px;
+  font-weight: 600;
+  background: rgba(99,102,241,0.2);
+  color: var(--accent);
+  border-radius: 4px;
+  padding: 2px 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* ── Computed value display ──────────────────────────────── */
+.computed-value {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.5rem 0.75rem;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--accent2);
+  min-height: 2.4rem;
+  display: flex;
+  align-items: center;
+}
+
+/* ── Gap Calendar ────────────────────────────────────────── */
+.gap-calendar-wrap {
+  max-width: 860px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1.25rem 1.5rem 1rem;
+  margin-bottom: 1.5rem;
+  box-shadow: var(--shadow-sm);
+}
+.gap-cal-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
+}
+.gap-cal-title {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.gap-cal-toggle {
+  font-size: 12px;
+  color: var(--text-muted);
+  width: 14px;
+  display: inline-block;
+  flex-shrink: 0;
+}
+.gap-cal-header:hover .gap-cal-title,
+.gap-cal-header:hover .gap-cal-toggle { color: var(--text-dim); }
+.gap-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-left: auto;
+}
+.gap-count {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 99px;
+}
+.gap-count.has-gaps {
+  background: rgba(244,63,94,0.12);
+  color: var(--red);
+  border: 1px solid rgba(244,63,94,0.25);
+}
+.gap-count.no-gaps {
+  background: rgba(34,197,94,0.1);
+  color: var(--green);
+  border: 1px solid rgba(34,197,94,0.22);
+}
+.gap-months-row {
+  display: flex;
+  gap: 1.75rem;
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+.gap-month { flex-shrink: 0; }
+.gap-month-label {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-dim);
+  margin-bottom: 6px;
+  letter-spacing: 0.01em;
+}
+.gap-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 26px);
+  gap: 2px;
+}
+.gap-cell {
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 5px;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: default;
+  transition: transform 0.1s var(--ease), background 0.1s var(--ease);
+  color: transparent;
+}
+.gap-cell.header {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-muted);
+  height: 20px;
+}
+.gap-cell.out-range {
+  color: var(--surface3);
+  font-size: 10px;
+}
+.gap-cell.sun {
+  color: var(--text-muted);
+  opacity: 0.3;
+}
+.gap-cell.filled {
+  background: rgba(34,197,94,0.1);
+  color: var(--green);
+  border: 1px solid rgba(34,197,94,0.18);
+  cursor: pointer;
+}
+.gap-cell.filled:hover { background: rgba(34,197,94,0.22); }
+.gap-cell.missing {
+  background: rgba(244,63,94,0.1);
+  color: var(--red);
+  border: 1px solid rgba(244,63,94,0.25);
+  cursor: pointer;
+  font-weight: 700;
+}
+.gap-cell.missing:hover {
+  background: rgba(244,63,94,0.22);
+  transform: scale(1.12);
+}
+.gap-cell.today {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 /* ── Responsive ──────────────────────────────────────────── */
 @media (max-width: 900px) {
   .sidebar { width: 58px; padding: 1rem 0.5rem; }

@@ -10,7 +10,7 @@
   <link rel="stylesheet" href="/static/css/style.css" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
 </head>
-<body>
+<body data-is-admin="{{ 'true' if is_admin else 'false' }}" data-username="{{ username }}">
   <!-- Sidebar -->
   <aside class="sidebar">
     <div class="brand">
@@ -41,6 +41,10 @@
       <button class="btn btn-outline btn-sm" id="importBtn">↑ Import Excel</button>
       <a class="btn btn-outline btn-sm" href="/api/template" download>↓ Template</a>
       <input type="file" id="importFile" accept=".xlsx,.xls" style="display:none" />
+      <div class="sidebar-user">
+        <span class="sidebar-username">{{ username }}</span>
+        <a href="/logout" class="btn-logout" title="Sign out">⏻</a>
+      </div>
     </div>
   </aside>
 
@@ -107,6 +111,8 @@
           <p class="page-sub">Data for an existing date will be overwritten (original is archived).</p>
         </div>
       </div>
+      <div id="gapCalendar" class="gap-calendar-wrap" data-open="false"></div>
+
       <div class="form-container">
         <form id="entryForm">
           <div class="form-section">
@@ -156,6 +162,11 @@
             <div class="form-group full-width">
               <textarea name="notes" rows="3" placeholder="Optional notes for this day…"></textarea>
             </div>
+          </div>
+
+          <div id="computedPreview" class="form-section hidden">
+            <h3 class="form-section-title">Computed Values</h3>
+            <div class="form-grid" id="computedFields"></div>
           </div>
 
           <div class="form-actions">
@@ -253,6 +264,19 @@
           </div>
           <button class="btn btn-primary btn-sm" id="savePasswordBtn">Update Password</button>
           <div id="passwordMsg" class="msg hidden" style="margin-top:0.5rem"></div>
+        </div>
+
+        <!-- User management (admin only) -->
+        <div class="settings-card wide" id="userMgmtCard" style="display:none">
+          <h3>User Management</h3>
+          <p class="settings-hint">Add or remove users who can access this dashboard.</p>
+          <div id="userList" style="margin-bottom:1rem;"></div>
+          <div class="tag-add" style="gap:0.5rem;">
+            <input type="text" id="newUserName" placeholder="Username" style="flex:1" />
+            <input type="password" id="newUserPassword" placeholder="Password" style="flex:1" autocomplete="new-password" />
+            <button class="btn btn-primary btn-sm" id="addUserBtn">Add User</button>
+          </div>
+          <div id="userMgmtMsg" class="msg hidden" style="margin-top:0.5rem"></div>
         </div>
 
         <!-- Data backup -->

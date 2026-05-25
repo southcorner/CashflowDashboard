@@ -1,5 +1,9 @@
 "use strict";
 
+// ── Auth context ───────────────────────────────────────────────────────────
+const IS_ADMIN = document.body.dataset.isAdmin === "true";
+const CURRENT_USER = document.body.dataset.username;
+
 // ── State ──────────────────────────────────────────────────────────────────
 let state = { data: {}, settings: {}, audit: [] };
 const rpt = { sort: { col: null, dir: "asc" }, hidden: new Set(), filters: [] };
@@ -39,6 +43,10 @@ async function api(path, opts = {}) {
     headers: { "Content-Type": "application/json" },
     ...opts,
   });
+  if (res.status === 401) {
+    window.location.href = "/login";
+    return {};
+  }
   return res.json();
 }
 
@@ -59,6 +67,12 @@ function filterByRange(data, start, end) {
     Object.entries(data).filter(([d]) => (!start || d >= start) && (!end || d <= end))
   );
 }
+
+function localDateStr(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+const GAP_START_DATE = new Date(2026, 4, 23); // May 23 2026, local time
 
 // ── Data loading ───────────────────────────────────────────────────────────
 async function loadAll() {
@@ -150,18 +164,20 @@ function renderDashboard() {
     },
   ];
 
-  // Add custom column KPI if defined
+  // Add custom column KPIs (cumulative over the filtered period)
   const customCols = state.settings.custom_columns || [];
-  if (customCols.length && today && todayRow.custom) {
-    const col = customCols[0];
-    const val = todayRow.custom[col.name];
+  customCols.forEach((col) => {
+    const total = dates.reduce((s, d) => {
+      const val = (filtered[d].custom || {})[col.name];
+      return s + (typeof val === "number" ? val : 0);
+    }, 0);
     kpis.push({
       label: col.name,
-      value: typeof val === "number" ? fmt(val) : String(val ?? "—"),
-      sub: `today (${today})`,
+      value: fmt(total),
+      sub: days ? `last ${days} days` : "all time",
       color: "var(--accent2)",
     });
-  }
+  });
 
   const grid = document.getElementById("kpiGrid");
   grid.innerHTML = kpis
@@ -391,7 +407,158 @@ function renderEntryForm() {
   // Set today's date as default
   const dateInput = document.getElementById("entryDate");
   if (!dateInput.value) dateInput.value = new Date().toISOString().slice(0, 10);
+
+  if (!dateInput._fillWired) {
+    dateInput.addEventListener("change", () => fillEntryForm(dateInput.value));
+    dateInput._fillWired = true;
+  }
+  fillEntryForm(dateInput.value);
+  renderGapCalendar();
 }
+
+function fillEntryForm(date) {
+  const preview = document.getElementById("computedPreview");
+  const computedFields = document.getElementById("computedFields");
+
+  const row = state.data[date];
+  if (!row) {
+    preview.classList.add("hidden");
+    return;
+  }
+
+  const form = document.getElementById("entryForm");
+  form.querySelector("[name=starting_balance]").value = row.starting_balance || "";
+  form.querySelector("[name=incoming]").value = row.incoming || "";
+  form.querySelector("[name=outgoing]").value = row.outgoing || "";
+  form.querySelector("[name=cogs]").value = row.cogs || "";
+  form.querySelector("[name=notes]").value = row.notes || "";
+
+  const channels = state.settings.sales_channels || [];
+  channels.forEach((ch) => {
+    const el = form.querySelector(`[name=sales_${ch}]`);
+    if (el) el.value = (row.sales || {})[ch] || "";
+  });
+
+  const outChannels = state.settings.outstanding_channels || [];
+  outChannels.forEach((ch) => {
+    const el = form.querySelector(`[name=outstanding_${ch}]`);
+    if (el) el.value = (row.outstanding || {})[ch] || "";
+  });
+
+  const customCols = state.settings.custom_columns || [];
+  if (customCols.length && row.custom) {
+    computedFields.innerHTML = customCols.map((col) => {
+      const val = (row.custom || {})[col.name];
+      const display = typeof val === "number" ? fmt(val) : (val ?? "—");
+      return `<div class="form-group">
+        <label>${col.name}</label>
+        <div class="computed-value">${display}</div>
+      </div>`;
+    }).join("");
+    preview.classList.remove("hidden");
+  } else {
+    preview.classList.add("hidden");
+  }
+}
+
+// ── Gap Calendar ───────────────────────────────────────────────────────────
+function renderGapCalendar() {
+  const container = document.getElementById("gapCalendar");
+  if (!container) return;
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const todayStr = localDateStr(today);
+  const filledDates = new Set(Object.keys(state.data));
+
+  // Count non-Sunday gaps from GAP_START_DATE to today
+  let gapCount = 0;
+  {
+    const d = new Date(GAP_START_DATE);
+    while (d <= today) {
+      if (d.getDay() !== 0 && !filledDates.has(localDateStr(d))) gapCount++;
+      d.setDate(d.getDate() + 1);
+    }
+  }
+
+  const isOpen = document.getElementById("gapCalendar").dataset.open !== "false";
+
+  const DAY_HEADERS = ["M", "T", "W", "T", "F", "S", "S"];
+  let html = `
+    <div class="gap-cal-header" onclick="toggleGapCalendar()" style="cursor:pointer;">
+      <span class="gap-cal-toggle">${isOpen ? "▾" : "▸"}</span>
+      <span class="gap-cal-title">Data Gaps</span>
+      <span class="gap-count ${gapCount > 0 ? "has-gaps" : "no-gaps"}">${gapCount} gap${gapCount !== 1 ? "s" : ""}</span>
+      <span class="gap-hint">Sundays excluded · click any date to fill it in</span>
+    </div>
+    <div class="gap-months-row" ${isOpen ? "" : 'style="display:none"'}>`;
+
+  let yr = GAP_START_DATE.getFullYear();
+  let mo = GAP_START_DATE.getMonth();
+  const endYr = today.getFullYear();
+  const endMo = today.getMonth();
+
+  while (yr < endYr || (yr === endYr && mo <= endMo)) {
+    const firstOfMonth = new Date(yr, mo, 1);
+    const daysInMonth = new Date(yr, mo + 1, 0).getDate();
+    const monthLabel = firstOfMonth.toLocaleString("default", { month: "short", year: "numeric" });
+    const padCells = (firstOfMonth.getDay() + 6) % 7; // Monday-first padding
+
+    html += `<div class="gap-month">
+      <div class="gap-month-label">${monthLabel}</div>
+      <div class="gap-grid">
+        ${DAY_HEADERS.map(h => `<div class="gap-cell header">${h}</div>`).join("")}
+        ${'<div class="gap-cell"></div>'.repeat(padCells)}`;
+
+    for (let day = 1; day <= daysInMonth; day++) {
+      const d = new Date(yr, mo, day);
+      const ds = localDateStr(d);
+      const isSun = d.getDay() === 0;
+      const isToday = ds === todayStr;
+      const beforeStart = d < GAP_START_DATE;
+      const afterToday = d > today;
+
+      let cls = "gap-cell";
+      let attrs = "";
+
+      if (beforeStart || afterToday) {
+        cls += " out-range";
+      } else if (isSun) {
+        cls += " sun";
+        attrs = `title="${ds} — Sunday"`;
+      } else if (filledDates.has(ds)) {
+        cls += " filled";
+        attrs = `title="${ds} ✓" onclick="jumpToDate('${ds}')"`;
+      } else {
+        cls += " missing";
+        attrs = `title="${ds} — Missing entry" onclick="jumpToDate('${ds}')"`;
+      }
+      if (isToday) cls += " today";
+
+      html += `<div class="${cls}" ${attrs}>${day}</div>`;
+    }
+
+    html += "</div></div>";
+    mo++;
+    if (mo > 11) { mo = 0; yr++; }
+  }
+
+  html += "</div>";
+  container.innerHTML = html;
+}
+
+window.jumpToDate = function (dateStr) {
+  document.getElementById("entryDate").value = dateStr;
+  fillEntryForm(dateStr);
+  document.getElementById("entryForm").scrollIntoView({ behavior: "smooth", block: "start" });
+};
+
+window.toggleGapCalendar = function () {
+  const container = document.getElementById("gapCalendar");
+  const isOpen = container.dataset.open !== "false";
+  container.dataset.open = isOpen ? "false" : "true";
+  renderGapCalendar();
+};
 
 function collectEntryForm() {
   const form = document.getElementById("entryForm");
@@ -649,12 +816,40 @@ async function renderBackupList() {
     </table>`;
 }
 
+async function renderUserManagement() {
+  const card = document.getElementById("userMgmtCard");
+  if (!IS_ADMIN) return;
+  card.style.display = "";
+
+  const users = await api("/api/users");
+  if (!Array.isArray(users)) return;
+
+  document.getElementById("userList").innerHTML = users.map(u => `
+    <div class="user-row">
+      <span class="user-name">${u.username}</span>
+      ${u.is_admin ? `<span class="user-badge">admin</span>` : ""}
+      ${!u.is_admin ? `<button class="btn-icon" onclick="deleteUser('${u.username}')" title="Remove user">✕</button>` : ""}
+    </div>`).join("");
+}
+
+window.deleteUser = async function(username) {
+  if (!confirm(`Remove user "${username}"?`)) return;
+  const res = await api(`/api/users/${username}`, { method: "DELETE" });
+  if (res.success) {
+    showToast(`User "${username}" removed.`);
+    renderUserManagement();
+  } else {
+    showToast(res.error || "Failed to remove user.");
+  }
+};
+
 function renderSettings() {
   const s = state.settings;
   renderTagList("salesChannelTags", s.sales_channels || [], "sales");
   renderTagList("outstandingChannelTags", s.outstanding_channels || [], "outstanding");
   renderCustomCols(s.custom_columns || []);
   renderBackupList();
+  renderUserManagement();
 
   document.getElementById("emailEnabled").checked = !!s.email_enabled;
   document.getElementById("emailSender").value = s.email_sender || "";
@@ -778,6 +973,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (res.success) {
       showMsg("entryMsg", `Entry for ${payload.date} saved successfully.`, "success");
       await loadAll();
+      renderGapCalendar();
     } else {
       showMsg("entryMsg", res.error || "Failed to save.", "error");
     }
@@ -988,6 +1184,30 @@ document.addEventListener("DOMContentLoaded", async () => {
       dd.classList.add("hidden");
     }
   });
+
+  // User management: add user
+  if (IS_ADMIN) {
+    document.getElementById("addUserBtn").addEventListener("click", async () => {
+      const username = document.getElementById("newUserName").value.trim();
+      const password = document.getElementById("newUserPassword").value;
+      if (!username || !password) { showMsg("userMgmtMsg", "Username and password are required.", "error"); return; }
+      const res = await api("/api/users", { method: "POST", body: JSON.stringify({ username, password }) });
+      if (res.success) {
+        document.getElementById("newUserName").value = "";
+        document.getElementById("newUserPassword").value = "";
+        showMsg("userMgmtMsg", `User "${username}" added.`, "success");
+        renderUserManagement();
+      } else {
+        showMsg("userMgmtMsg", res.error || "Failed to add user.", "error");
+      }
+    });
+    document.getElementById("newUserName").addEventListener("keydown", e => {
+      if (e.key === "Enter") document.getElementById("newUserPassword").focus();
+    });
+    document.getElementById("newUserPassword").addEventListener("keydown", e => {
+      if (e.key === "Enter") document.getElementById("addUserBtn").click();
+    });
+  }
 
   // Email settings: send test
   document.getElementById("sendTestEmailBtn").addEventListener("click", async () => {

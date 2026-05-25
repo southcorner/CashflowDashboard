@@ -1,6 +1,7 @@
 import os
 import io
 import json
+import hashlib
 import smtplib
 import ssl
 import atexit
@@ -13,11 +14,12 @@ from email.mime.text import MIMEText
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment
 from openpyxl.utils import get_column_letter
-from flask import Flask, jsonify, render_template, request, send_file
+from flask import Flask, jsonify, render_template, request, send_file, session, redirect
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 app = Flask(__name__, template_folder="template")
+app.secret_key = os.environ.get("SECRET_KEY", "sg_cf_9k2x7m4p_2024")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data")
@@ -25,6 +27,7 @@ DAILY_FILE = os.path.join(DATA_DIR, "daily_data.json")
 SETTINGS_FILE = os.path.join(DATA_DIR, "settings.json")
 AUDIT_FILE = os.path.join(DATA_DIR, "audit_log.json")
 BACKUP_DIR = os.path.join(DATA_DIR, "backups")
+USERS_FILE = os.path.join(DATA_DIR, "users.json")
 
 DEFAULT_SETTINGS = {
     "sales_channels": ["DF", "AMZ PO", "FK PO", "Katana site", "Offline", "Badpeople site"],
@@ -42,6 +45,106 @@ DEFAULT_SETTINGS = {
 def ensure_dirs():
     os.makedirs(DATA_DIR, exist_ok=True)
     os.makedirs(BACKUP_DIR, exist_ok=True)
+    _ensure_admin()
+
+
+# ── Auth ─────────────────────────────────────────────────────────────────────
+
+def _hash_pw(password):
+    return hashlib.sha256(password.encode("utf-8")).hexdigest()
+
+
+def load_users():
+    return load_json(USERS_FILE, {})
+
+
+def _ensure_admin():
+    users = load_users()
+    if not any(v.get("is_admin") for v in users.values()):
+        users["Vivek"] = {"password_hash": _hash_pw("Keviv@0411"), "is_admin": True}
+        save_json(USERS_FILE, users)
+
+
+@app.before_request
+def require_login():
+    public = {"login_page", "login_post", "logout", "static"}
+    if request.endpoint in public or request.endpoint is None:
+        return
+    if "username" not in session:
+        if request.path.startswith("/api/"):
+            return jsonify({"error": "unauthenticated"}), 401
+        return redirect("/login")
+
+
+@app.route("/login", methods=["GET"])
+def login_page():
+    if "username" in session:
+        return redirect("/")
+    return render_template("login.html")
+
+
+@app.route("/login", methods=["POST"])
+def login_post():
+    data = request.json or {}
+    username = (data.get("username") or "").strip()
+    password = data.get("password") or ""
+    users = load_users()
+    user = users.get(username)
+    if not user or user.get("password_hash") != _hash_pw(password):
+        return jsonify({"error": "Invalid username or password"}), 401
+    session["username"] = username
+    session["is_admin"] = bool(user.get("is_admin"))
+    return jsonify({"success": True, "is_admin": session["is_admin"]})
+
+
+@app.route("/logout")
+def logout():
+    session.clear()
+    return redirect("/login")
+
+
+@app.route("/api/users", methods=["GET"])
+def api_get_users():
+    if not session.get("is_admin"):
+        return jsonify({"error": "Admin access required"}), 403
+    users = load_users()
+    return jsonify([
+        {"username": u, "is_admin": v.get("is_admin", False)}
+        for u, v in users.items()
+    ])
+
+
+@app.route("/api/users", methods=["POST"])
+def api_add_user():
+    if not session.get("is_admin"):
+        return jsonify({"error": "Admin access required"}), 403
+    data = request.json or {}
+    username = (data.get("username") or "").strip()
+    password = data.get("password") or ""
+    if not username or not password:
+        return jsonify({"error": "Username and password are required"}), 400
+    users = load_users()
+    if username in users:
+        return jsonify({"error": f"Username '{username}' already exists"}), 400
+    users[username] = {"password_hash": _hash_pw(password), "is_admin": False}
+    save_json(USERS_FILE, users)
+    return jsonify({"success": True})
+
+
+@app.route("/api/users/<username>", methods=["DELETE"])
+def api_delete_user(username):
+    if not session.get("is_admin"):
+        return jsonify({"error": "Admin access required"}), 403
+    if username == session.get("username"):
+        return jsonify({"error": "Cannot delete your own account"}), 400
+    users = load_users()
+    if username not in users:
+        return jsonify({"error": "User not found"}), 404
+    if users[username].get("is_admin"):
+        return jsonify({"error": "Cannot delete admin accounts"}), 400
+    del users[username]
+    save_json(USERS_FILE, users)
+    return jsonify({"success": True})
 
 
 def load_json(path, default):
@@ -297,7 +400,11 @@ def send_weekly_email():
 
 @app.route("/")
 def index():
-    return render_template("index.html")
+    return render_template(
+        "index.html",
+        username=session.get("username", ""),
+        is_admin=session.get("is_admin", False),
+    )
 
 
 @app.route("/api/settings", methods=["GET"])
