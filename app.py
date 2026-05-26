@@ -739,6 +739,343 @@ def api_download_backup(filename):
     return send_file(filepath, as_attachment=True, download_name=safe)
 
 
+# ── Campaign Dashboard ──────────────────────────────────────────────────────
+
+CAMPAIGNS_CONFIG_FILE = os.path.join(DATA_DIR, "campaigns_config.json")
+CAMPAIGNS_CACHE_FILE  = os.path.join(DATA_DIR, "campaigns_cache.json")
+
+_MASKED = "••••••"
+_SENSITIVE = {"access_token", "client_secret", "refresh_token", "developer_token", "api_key"}
+
+
+def load_campaigns_config():
+    return load_json(CAMPAIGNS_CONFIG_FILE, {})
+
+
+def _mask_config(cfg):
+    return {
+        platform: {k: (_MASKED if k in _SENSITIVE and v else v) for k, v in creds.items()}
+        for platform, creds in cfg.items()
+    }
+
+
+def _merge_config(existing, patch):
+    result = deepcopy(existing)
+    for platform, creds in patch.items():
+        if platform not in result:
+            result[platform] = {}
+        for k, v in creds.items():
+            if v and v != _MASKED:
+                result[platform][k] = v
+    return result
+
+
+def _has_creds(pcfg):
+    return bool(pcfg and any(v for v in pcfg.values()))
+
+
+def _totals(campaigns):
+    spend   = sum(c["spend"]   for c in campaigns)
+    revenue = sum(c["revenue"] for c in campaigns)
+    return {
+        "spend":       round(spend, 2),
+        "conversions": sum(c["conversions"] for c in campaigns),
+        "revenue":     round(revenue, 2),
+        "roas":        round(revenue / spend, 2) if spend else 0,
+    }
+
+
+def fetch_meta(pcfg, days):
+    try:
+        from facebook_business.api import FacebookAdsApi
+        from facebook_business.adobjects.adaccount import AdAccount
+    except ImportError:
+        raise Exception("Package missing — run: pip install facebook-business")
+
+    for key in ("access_token", "ad_account_id"):
+        if not pcfg.get(key):
+            raise Exception(f"Missing credential: {key}")
+
+    FacebookAdsApi.init(access_token=pcfg["access_token"])
+    account  = AdAccount(pcfg["ad_account_id"])
+    preset   = {0: "today", 7: "last_7_d", 30: "this_month"}.get(days, "last_7_d")
+    raw_cams = account.get_campaigns(
+        fields=["id", "name", "daily_budget", "lifetime_budget"],
+        params={"effective_status": ["ACTIVE"]},
+    )
+
+    results = []
+    for c in raw_cams:
+        ins_list = c.get_insights(
+            fields=["spend", "actions", "action_values", "purchase_roas"],
+            params={"date_preset": preset},
+        )
+        spend = conv = revenue = roas = 0.0
+        if ins_list:
+            ins = ins_list[0]
+            spend = float(ins.get("spend") or 0)
+            for a in ins.get("actions") or []:
+                if a.get("action_type") == "purchase":
+                    conv = float(a.get("value", 0))
+            for a in ins.get("action_values") or []:
+                if a.get("action_type") == "purchase":
+                    revenue = float(a.get("value", 0))
+            pr = ins.get("purchase_roas") or []
+            roas = float(pr[0].get("value", 0)) if pr else 0.0
+
+        db, lb = c.get("daily_budget"), c.get("lifetime_budget")
+        results.append({
+            "id": c["id"], "name": c["name"], "platform": "meta", "status": "ACTIVE",
+            "budget": float(db or lb or 0) / 100,
+            "budget_type": "daily" if db else "lifetime",
+            "spend": round(spend, 2), "conversions": int(conv),
+            "revenue": round(revenue, 2), "roas": round(roas, 2),
+        })
+    return {"campaigns": results, "totals": _totals(results)}
+
+
+def fetch_google(pcfg, days):
+    try:
+        from google.ads.googleads.client import GoogleAdsClient
+    except ImportError:
+        raise Exception("Package missing — run: pip install google-ads")
+
+    required = ["developer_token", "client_id", "client_secret", "refresh_token", "customer_id"]
+    missing  = [k for k in required if not pcfg.get(k)]
+    if missing:
+        raise Exception(f"Missing credentials: {', '.join(missing)}")
+
+    clause = {0: "TODAY", 7: "LAST_7_DAYS", 30: "THIS_MONTH"}.get(days, "LAST_7_DAYS")
+    creds  = {
+        "developer_token": pcfg["developer_token"],
+        "client_id":       pcfg["client_id"],
+        "client_secret":   pcfg["client_secret"],
+        "refresh_token":   pcfg["refresh_token"],
+        "use_proto_plus":  True,
+    }
+    if pcfg.get("login_customer_id"):
+        creds["login_customer_id"] = pcfg["login_customer_id"]
+
+    client     = GoogleAdsClient.load_from_dict(creds)
+    ga_service = client.get_service("GoogleAdsService")
+    query = f"""
+        SELECT campaign.id, campaign.name,
+               metrics.cost_micros, metrics.conversions, metrics.conversions_value
+        FROM campaign
+        WHERE campaign.status = 'ENABLED'
+        AND segments.date DURING {clause}
+    """
+    results = []
+    for row in ga_service.search(customer_id=pcfg["customer_id"].replace("-", ""), query=query):
+        spend   = row.metrics.cost_micros / 1_000_000
+        revenue = row.metrics.conversions_value
+        results.append({
+            "id": str(row.campaign.id), "name": row.campaign.name,
+            "platform": "google", "status": "ACTIVE",
+            "budget": 0, "budget_type": "daily",
+            "spend": round(spend, 2), "conversions": int(row.metrics.conversions),
+            "revenue": round(revenue, 2), "roas": round(revenue / spend, 2) if spend else 0,
+        })
+    return {"campaigns": results, "totals": _totals(results)}
+
+
+def _amazon_token(pcfg):
+    import requests as req
+    resp = req.post("https://api.amazon.com/auth/o2/token", data={
+        "grant_type":    "refresh_token",
+        "client_id":     pcfg["client_id"],
+        "client_secret": pcfg["client_secret"],
+        "refresh_token": pcfg["refresh_token"],
+    }, timeout=15)
+    resp.raise_for_status()
+    return resp.json()["access_token"]
+
+
+def fetch_amazon(pcfg, days):
+    import requests as req, gzip as gz, time
+
+    required = ["client_id", "client_secret", "refresh_token", "profile_id"]
+    missing  = [k for k in required if not pcfg.get(k)]
+    if missing:
+        raise Exception(f"Missing credentials: {', '.join(missing)}")
+
+    host  = {"eu": "advertising-api-eu.amazon.com", "fe": "advertising-api-fe.amazon.com"}.get(
+        pcfg.get("region", "na"), "advertising-api.amazon.com")
+    base  = f"https://{host}"
+    token = _amazon_token(pcfg)
+    hdrs  = {
+        "Authorization":                    f"Bearer {token}",
+        "Amazon-Advertising-API-ClientId":  pcfg["client_id"],
+        "Amazon-Advertising-API-Scope":     pcfg["profile_id"],
+        "Content-Type":                     "application/json",
+    }
+
+    cams_resp = req.get(f"{base}/v2/sp/campaigns", headers=hdrs,
+                        params={"stateFilter": "enabled"}, timeout=15)
+    cams_resp.raise_for_status()
+    cams_raw = cams_resp.json()
+
+    today   = date.today()
+    end_d   = today.strftime("%Y%m%d")
+    start_d = (today if days == 0 else (today.replace(day=1) if days == 30
+               else today - timedelta(days=days - 1))).strftime("%Y%m%d")
+
+    # Request async report
+    metrics_by_id = {}
+    r_resp = req.post(f"{base}/v2/sp/campaigns/report", headers=hdrs, timeout=15, json={
+        "reportDate": end_d,
+        "metrics":    "campaignId,campaignName,spend,attributedConversions14d,attributedSales14d",
+        "stateFilter": "enabled",
+    })
+    if r_resp.ok:
+        report_id = r_resp.json().get("reportId")
+        if report_id:
+            for _ in range(6):
+                time.sleep(5)
+                s = req.get(f"{base}/v2/reports/{report_id}", headers=hdrs, timeout=15).json()
+                if s.get("status") == "SUCCESS":
+                    dl = req.get(s["location"], timeout=30)
+                    try:
+                        rows = json.loads(gz.decompress(dl.content))
+                    except Exception:
+                        rows = json.loads(dl.content)
+                    for row in rows:
+                        metrics_by_id[str(row.get("campaignId", ""))] = {
+                            "spend":       float(row.get("spend", 0)),
+                            "conversions": int(float(row.get("attributedConversions14d", 0))),
+                            "revenue":     float(row.get("attributedSales14d", 0)),
+                        }
+                    break
+
+    results = []
+    for c in cams_raw:
+        cid = str(c.get("campaignId", ""))
+        m   = metrics_by_id.get(cid, {"spend": 0, "conversions": 0, "revenue": 0})
+        sp, rev = m["spend"], m["revenue"]
+        results.append({
+            "id": cid, "name": c.get("name", ""), "platform": "amazon", "status": "ACTIVE",
+            "budget": float(c.get("dailyBudget", 0)), "budget_type": "daily",
+            "spend": sp, "conversions": m["conversions"],
+            "revenue": rev, "roas": round(rev / sp, 2) if sp else 0,
+        })
+    return {"campaigns": results, "totals": _totals(results)}
+
+
+def fetch_flipkart(pcfg, days):
+    import requests as req
+
+    required = ["api_key", "seller_id"]
+    missing  = [k for k in required if not pcfg.get(k)]
+    if missing:
+        raise Exception(f"Missing credentials: {', '.join(missing)}")
+
+    today  = date.today()
+    end_d  = today.isoformat()
+    start_d = (today if days == 0 else (today.replace(day=1) if days == 30
+               else today - timedelta(days=days - 1))).isoformat()
+
+    hdrs = {"Authorization": f"Bearer {pcfg['api_key']}", "Content-Type": "application/json"}
+
+    resp = req.get("https://api.flipkart.net/sellers/v3/ads/campaigns", headers=hdrs,
+                   params={"status": "ACTIVE", "sellerId": pcfg["seller_id"]}, timeout=15)
+    resp.raise_for_status()
+    cams_raw = resp.json().get("campaigns", [])
+
+    results = []
+    for c in cams_raw:
+        cid = str(c.get("campaignId", c.get("id", "")))
+        try:
+            m_resp = req.get(
+                f"https://api.flipkart.net/sellers/v3/ads/campaigns/{cid}/metrics",
+                headers=hdrs, params={"startDate": start_d, "endDate": end_d}, timeout=15)
+            m = m_resp.json() if m_resp.ok else {}
+        except Exception:
+            m = {}
+        sp  = float(m.get("spend", 0))
+        rev = float(m.get("revenue", m.get("attributedRevenue", 0)))
+        results.append({
+            "id": cid, "name": c.get("campaignName", c.get("name", "")),
+            "platform": "flipkart", "status": "ACTIVE",
+            "budget": float(c.get("dailyBudget", c.get("budget", 0))), "budget_type": "daily",
+            "spend": sp, "conversions": int(float(m.get("conversions", m.get("orders", 0)))),
+            "revenue": rev, "roas": round(rev / sp, 2) if sp else 0,
+        })
+    return {"campaigns": results, "totals": _totals(results)}
+
+
+_FETCHERS = {"meta": fetch_meta, "google": fetch_google,
+             "amazon": fetch_amazon, "flipkart": fetch_flipkart}
+
+
+def _run_fetchers(cfg, days, platforms=None):
+    result = {}
+    for p in (platforms or list(_FETCHERS.keys())):
+        pcfg = cfg.get(p, {})
+        if not _has_creds(pcfg):
+            result[p] = {"ok": False, "error": "no_credentials"}
+            continue
+        try:
+            data       = _FETCHERS[p](pcfg, days)
+            data["ok"] = True
+            result[p]  = data
+        except Exception as e:
+            result[p] = {"ok": False, "error": str(e)}
+    return result
+
+
+@app.route("/campaigns")
+def campaigns_page():
+    return render_template("campaigns.html",
+                           username=session.get("username", ""),
+                           is_admin=session.get("is_admin", False))
+
+
+@app.route("/api/campaigns/settings", methods=["GET"])
+def api_campaigns_settings_get():
+    return jsonify(_mask_config(load_campaigns_config()))
+
+
+@app.route("/api/campaigns/settings", methods=["POST"])
+def api_campaigns_settings_post():
+    merged = _merge_config(load_campaigns_config(), request.json or {})
+    save_json(CAMPAIGNS_CONFIG_FILE, merged)
+    return jsonify({"success": True})
+
+
+@app.route("/api/campaigns/data", methods=["GET"])
+def api_campaigns_data():
+    days  = int(request.args.get("range", 7))
+    cache = load_json(CAMPAIGNS_CACHE_FILE, {})
+    entry = cache.get(str(days), {})
+    if entry.get("fetched_at"):
+        age = (datetime.now() - datetime.fromisoformat(entry["fetched_at"])).total_seconds()
+        if age < 3600:
+            return jsonify(entry["data"])
+    result              = _run_fetchers(load_campaigns_config(), days)
+    cache[str(days)]    = {"fetched_at": datetime.now().isoformat(), "data": result}
+    save_json(CAMPAIGNS_CACHE_FILE, cache)
+    return jsonify(result)
+
+
+@app.route("/api/campaigns/refresh", methods=["POST"])
+def api_campaigns_refresh():
+    body     = request.json or {}
+    days     = int(body.get("range", 7))
+    platform = body.get("platform")
+    result   = _run_fetchers(load_campaigns_config(), days, [platform] if platform else None)
+    cache    = load_json(CAMPAIGNS_CACHE_FILE, {})
+    key      = str(days)
+    if key not in cache:
+        cache[key] = {"fetched_at": datetime.now().isoformat(), "data": {}}
+    if platform:
+        cache[key]["data"][platform] = result.get(platform, {})
+        cache[key]["fetched_at"]     = datetime.now().isoformat()
+    else:
+        cache[key] = {"fetched_at": datetime.now().isoformat(), "data": result}
+    save_json(CAMPAIGNS_CACHE_FILE, cache)
+    return jsonify(result.get(platform, result) if platform else result)
+
+
 if __name__ == "__main__":
     ensure_dirs()
 

@@ -419,29 +419,43 @@ function renderEntryForm() {
 function fillEntryForm(date) {
   const preview = document.getElementById("computedPreview");
   const computedFields = document.getElementById("computedFields");
+  const form = document.getElementById("entryForm");
+
+  const channels    = state.settings.sales_channels        || [];
+  const outChannels = state.settings.outstanding_channels  || [];
 
   const row = state.data[date];
   if (!row) {
+    // Clear all fields so stale data from a previously viewed date isn't retained
+    ["starting_balance", "incoming", "outgoing", "cogs", "notes"].forEach((n) => {
+      if (form.elements[n]) form.elements[n].value = "";
+    });
+    channels.forEach((ch) => {
+      const el = form.elements[`sales_${ch}`];
+      if (el) el.value = "";
+    });
+    outChannels.forEach((ch) => {
+      const el = form.elements[`outstanding_${ch}`];
+      if (el) el.value = "";
+    });
     preview.classList.add("hidden");
     return;
   }
 
-  const form = document.getElementById("entryForm");
-  form.querySelector("[name=starting_balance]").value = row.starting_balance || "";
-  form.querySelector("[name=incoming]").value = row.incoming || "";
-  form.querySelector("[name=outgoing]").value = row.outgoing || "";
-  form.querySelector("[name=cogs]").value = row.cogs || "";
-  form.querySelector("[name=notes]").value = row.notes || "";
+  // Use form.elements[name] — handles channel names with spaces correctly
+  form.elements["starting_balance"].value = row.starting_balance || "";
+  form.elements["incoming"].value         = row.incoming         || "";
+  form.elements["outgoing"].value         = row.outgoing         || "";
+  form.elements["cogs"].value             = row.cogs             || "";
+  form.elements["notes"].value            = row.notes            || "";
 
-  const channels = state.settings.sales_channels || [];
   channels.forEach((ch) => {
-    const el = form.querySelector(`[name=sales_${ch}]`);
+    const el = form.elements[`sales_${ch}`];
     if (el) el.value = (row.sales || {})[ch] || "";
   });
 
-  const outChannels = state.settings.outstanding_channels || [];
   outChannels.forEach((ch) => {
-    const el = form.querySelector(`[name=outstanding_${ch}]`);
+    const el = form.elements[`outstanding_${ch}`];
     if (el) el.value = (row.outstanding || {})[ch] || "";
   });
 
@@ -993,6 +1007,28 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
   document.getElementById("reportStart").addEventListener("change", renderReports);
   document.getElementById("reportEnd").addEventListener("change", renderReports);
+
+  document.getElementById("quickToday").addEventListener("click", () => {
+    const t = new Date().toISOString().slice(0, 10);
+    document.getElementById("lifetimeToggle").checked = false;
+    document.getElementById("reportStart").disabled = false;
+    document.getElementById("reportEnd").disabled = false;
+    document.getElementById("reportStart").value = t;
+    document.getElementById("reportEnd").value = t;
+    renderReports();
+  });
+
+  document.getElementById("quickMonth").addEventListener("click", () => {
+    const now = new Date();
+    const firstOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10);
+    const today = now.toISOString().slice(0, 10);
+    document.getElementById("lifetimeToggle").checked = false;
+    document.getElementById("reportStart").disabled = false;
+    document.getElementById("reportEnd").disabled = false;
+    document.getElementById("reportStart").value = firstOfMonth;
+    document.getElementById("reportEnd").value = today;
+    renderReports();
+  });
 
   // Set default report date range (last 30 days)
   const today = new Date().toISOString().slice(0, 10);
