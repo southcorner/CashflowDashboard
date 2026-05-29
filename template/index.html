@@ -104,6 +104,7 @@
           <canvas id="balanceChart" height="180"></canvas>
         </div>
       </div>
+      <div id="customChartsGrid" class="charts-grid" style="margin-top:1rem;"></div>
     </section>
 
     <!-- ── DATA ENTRY TAB ── -->
@@ -251,6 +252,23 @@
             <input type="text" id="newColName" placeholder="Column name (e.g. Gross Profit)" />
             <input type="text" id="newColFormula" placeholder="Formula (e.g. incoming - outgoing - cogs)" />
             <button class="btn btn-primary btn-sm" id="addCustomColBtn">Add Column</button>
+          </div>
+        </div>
+
+        <!-- Custom charts -->
+        <div class="settings-card wide">
+          <h3>Custom Charts</h3>
+          <p class="settings-hint">Add charts to the Dashboard below the built-in charts. All charts follow the Dashboard's date filter. Doughnut charts using <code>Total Sales</code> or <code>Total Outstanding</code> show a per-channel breakdown.</p>
+          <div id="customChartsList"></div>
+          <div class="custom-chart-form">
+            <input type="text" id="newChartName" placeholder="Chart name (e.g. Daily COGS)" />
+            <select id="newChartType" class="select-sm">
+              <option value="line">Line</option>
+              <option value="bar">Bar</option>
+              <option value="doughnut">Doughnut</option>
+            </select>
+            <select id="newChartField" class="select-sm" style="min-width:180px;"></select>
+            <button class="btn btn-primary btn-sm" id="addCustomChartBtn">Add Chart</button>
           </div>
         </div>
 

@@ -839,6 +839,16 @@ hr { border: none; border-top: 1px solid var(--border); margin: 1.5rem 0; }
   outline-offset: 1px;
 }
 
+/* ── Custom chart form ───────────────────────────────────── */
+.custom-chart-form {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.875rem;
+  flex-wrap: wrap;
+  align-items: flex-end;
+}
+.custom-chart-form input { flex: 1; min-width: 160px; }
+
 /* ── Responsive ──────────────────────────────────────────── */
 @media (max-width: 900px) {
   .sidebar { width: 58px; padding: 1rem 0.5rem; }

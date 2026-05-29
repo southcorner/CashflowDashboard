@@ -9,6 +9,10 @@ let state = { data: {}, settings: {}, audit: [] };
 const rpt = { sort: { col: null, dir: "asc" }, hidden: new Set(), filters: [] };
 let charts = {};
 
+function destroyChart(id) {
+  if (charts[id]) { charts[id].destroy(); delete charts[id]; }
+}
+
 // ── Utilities ──────────────────────────────────────────────────────────────
 const fmt = (n) =>
   typeof n === "number"
@@ -70,6 +74,12 @@ function filterByRange(data, start, end) {
 
 function localDateStr(d) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function escHtml(s) {
+  return String(s ?? "")
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
 const GAP_START_DATE = new Date(2026, 4, 23); // May 23 2026, local time
@@ -218,10 +228,6 @@ function renderCharts(data, dates) {
     "#ec4899","#84cc16","#14b8a6","#f97316",
   ];
 
-  function destroyChart(id) {
-    if (charts[id]) { charts[id].destroy(); delete charts[id]; }
-  }
-
   // ── Cashflow line chart ──
   destroyChart("cashflow");
   const cfCtx = document.getElementById("cashflowChart").getContext("2d");
@@ -333,6 +339,8 @@ function renderCharts(data, dates) {
     },
     options: chartOptions("₹"),
   });
+
+  renderCustomCharts(data, dates);
 }
 
 function chartOptions(prefix = "") {
@@ -375,6 +383,150 @@ function yScale(prefix) {
       callback: (v) => `${prefix}${v.toLocaleString("en-IN")}`,
     },
   };
+}
+
+// ── Custom Charts ──────────────────────────────────────────────────────────
+
+function getCustomFieldValue(row, fieldKey) {
+  if (!row) return 0;
+  switch (fieldKey) {
+    case "incoming":          return row.incoming          || 0;
+    case "outgoing":          return row.outgoing          || 0;
+    case "cogs":              return row.cogs              || 0;
+    case "starting_balance":  return row.starting_balance  || 0;
+    case "total_sales":       return Object.values(row.sales       || {}).reduce((a,b)=>a+b, 0);
+    case "total_outstanding": return Object.values(row.outstanding || {}).reduce((a,b)=>a+b, 0);
+    default:
+      if (fieldKey.startsWith("s:")) return (row.sales       || {})[fieldKey.slice(2)] || 0;
+      if (fieldKey.startsWith("o:")) return (row.outstanding || {})[fieldKey.slice(2)] || 0;
+      if (fieldKey.startsWith("c:")) return (row.custom      || {})[fieldKey.slice(2)] || 0;
+      return 0;
+  }
+}
+
+function buildCustomChartFieldOptions() {
+  const salesCh = state.settings.sales_channels        || [];
+  const outCh   = state.settings.outstanding_channels  || [];
+  const custCol = state.settings.custom_columns        || [];
+  return [
+    { v: "incoming",          l: "Incoming"          },
+    { v: "outgoing",          l: "Outgoing"          },
+    { v: "cogs",              l: "COGS"              },
+    { v: "starting_balance",  l: "Starting Balance"  },
+    { v: "total_sales",       l: "Total Sales"       },
+    { v: "total_outstanding", l: "Total Outstanding" },
+    ...salesCh.map(ch => ({ v: `s:${ch}`, l: `${ch} (Sales)`        })),
+    ...outCh.map(ch   => ({ v: `o:${ch}`, l: `${ch} (Outstanding)` })),
+    ...custCol.map(c  => ({ v: `c:${c.name}`, l: c.name             })),
+  ].map(f => `<option value="${escHtml(f.v)}">${escHtml(f.l)}</option>`).join("");
+}
+
+function renderCustomChartsSettings() {
+  const container = document.getElementById("customChartsList");
+  if (!container) return;
+  const customCharts = state.settings.custom_charts || [];
+
+  const TYPE_LABELS = { line: "Line", bar: "Bar", doughnut: "Doughnut" };
+  const fieldLabel = (key) => {
+    const salesCh = state.settings.sales_channels        || [];
+    const outCh   = state.settings.outstanding_channels  || [];
+    const custCol = state.settings.custom_columns        || [];
+    const map = {
+      incoming: "Incoming", outgoing: "Outgoing", cogs: "COGS",
+      starting_balance: "Starting Balance", total_sales: "Total Sales",
+      total_outstanding: "Total Outstanding",
+    };
+    salesCh.forEach(ch => { map[`s:${ch}`] = `${ch} (Sales)`;        });
+    outCh.forEach(ch   => { map[`o:${ch}`] = `${ch} (Outstanding)`;  });
+    custCol.forEach(c  => { map[`c:${c.name}`] = c.name;             });
+    return map[key] || key;
+  };
+
+  container.innerHTML = customCharts.map((c, i) => `
+    <div class="custom-col-item">
+      <span class="col-name">${escHtml(c.name)}</span>
+      <span class="col-formula">${TYPE_LABELS[c.type] || c.type} · ${escHtml(fieldLabel(c.field))}</span>
+      <button class="btn-icon" onclick="removeCustomChart(${i})">✕</button>
+    </div>`).join("");
+
+  const sel = document.getElementById("newChartField");
+  if (sel) sel.innerHTML = buildCustomChartFieldOptions();
+}
+
+function renderCustomCharts(filtered, dates) {
+  const container = document.getElementById("customChartsGrid");
+  if (!container) return;
+
+  Object.keys(charts)
+    .filter(k => k.startsWith("custom_"))
+    .forEach(k => { charts[k].destroy(); delete charts[k]; });
+
+  const customCharts = state.settings.custom_charts || [];
+  if (!customCharts.length) { container.innerHTML = ""; return; }
+
+  const salesCh = state.settings.sales_channels       || [];
+  const outCh   = state.settings.outstanding_channels || [];
+  const palette = ["#6366f1","#06b6d4","#10b981","#f59e0b","#a855f7","#ef4444","#ec4899","#84cc16","#14b8a6","#f97316"];
+
+  container.innerHTML = customCharts.map((c, i) => `
+    <div class="chart-card${c.type !== "doughnut" ? " wide" : ""}">
+      <div class="chart-card-header">
+        <h3>${escHtml(c.name)}</h3>
+        <span style="font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em;">${c.type}</span>
+      </div>
+      <canvas id="customChart_${i}" height="${c.type === "doughnut" ? "180" : "100"}"></canvas>
+    </div>`).join("");
+
+  customCharts.forEach((c, i) => {
+    const ctx   = document.getElementById(`customChart_${i}`).getContext("2d");
+    const color = palette[i % palette.length];
+
+    if (c.type === "doughnut") {
+      let labels, values;
+      if (c.field === "total_sales") {
+        labels = salesCh;
+        values = salesCh.map(ch => dates.reduce((s, d) => s + ((filtered[d].sales || {})[ch] || 0), 0));
+      } else if (c.field === "total_outstanding") {
+        const ld = dates[dates.length - 1];
+        const lr = ld ? filtered[ld] : {};
+        labels = outCh;
+        values = outCh.map(ch => (lr.outstanding || {})[ch] || 0);
+      } else {
+        const total = dates.reduce((s, d) => s + getCustomFieldValue(filtered[d], c.field), 0);
+        labels = [c.name];
+        values = [total];
+      }
+      charts[`custom_${i}`] = new Chart(ctx, {
+        type: "doughnut",
+        data: { labels, datasets: [{ data: values, backgroundColor: palette, borderWidth: 1, borderColor: "#111827" }] },
+        options: {
+          responsive: true,
+          plugins: {
+            legend: { position: "bottom", labels: { color: "#94a3b8", boxWidth: 12, font: { size: 12 } } },
+            tooltip: { callbacks: { label: (ctx) => `${ctx.label}: ₹${ctx.raw.toLocaleString("en-IN")}` } },
+          },
+        },
+      });
+    } else {
+      charts[`custom_${i}`] = new Chart(ctx, {
+        type: c.type,
+        data: {
+          labels: dates,
+          datasets: [{
+            label: c.name,
+            data: dates.map(d => getCustomFieldValue(filtered[d], c.field)),
+            borderColor: color,
+            backgroundColor: color + (c.type === "line" ? "22" : "bb"),
+            tension: 0.3,
+            fill: c.type === "line",
+            pointRadius: 3,
+            borderRadius: c.type === "bar" ? 4 : undefined,
+          }],
+        },
+        options: chartOptions("₹"),
+      });
+    }
+  });
 }
 
 // ── Data Entry Form ────────────────────────────────────────────────────────
@@ -862,6 +1014,7 @@ function renderSettings() {
   renderTagList("salesChannelTags", s.sales_channels || [], "sales");
   renderTagList("outstandingChannelTags", s.outstanding_channels || [], "outstanding");
   renderCustomCols(s.custom_columns || []);
+  renderCustomChartsSettings();
   renderBackupList();
   renderUserManagement();
 
@@ -929,6 +1082,12 @@ window.removeChannel = async function (type, name) {
 
 window.removeCustomCol = async function (idx) {
   state.settings.custom_columns.splice(idx, 1);
+  await saveSettings();
+  renderSettings();
+};
+
+window.removeCustomChart = async function (idx) {
+  state.settings.custom_charts.splice(idx, 1);
   await saveSettings();
   renderSettings();
 };
@@ -1081,6 +1240,22 @@ document.addEventListener("DOMContentLoaded", async () => {
     document.getElementById("newColFormula").value = "";
     await saveSettings();
     renderSettings();
+  });
+
+  // Settings: add custom chart
+  document.getElementById("addCustomChartBtn").addEventListener("click", async () => {
+    const name  = document.getElementById("newChartName").value.trim();
+    const type  = document.getElementById("newChartType").value;
+    const field = document.getElementById("newChartField").value;
+    if (!name) { showToast("Chart name is required."); return; }
+    state.settings.custom_charts = state.settings.custom_charts || [];
+    state.settings.custom_charts.push({ name, type, field });
+    document.getElementById("newChartName").value = "";
+    await saveSettings();
+    renderSettings();
+  });
+  document.getElementById("newChartName").addEventListener("keydown", e => {
+    if (e.key === "Enter") document.getElementById("addCustomChartBtn").click();
   });
 
   // Settings: update password
