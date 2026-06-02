@@ -487,6 +487,18 @@ textarea { resize: vertical; }
 }
 .custom-col-item .col-name    { font-weight: 600; color: var(--text); min-width: 100px; }
 .custom-col-item .col-formula { color: var(--accent2); font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px; flex: 1; }
+.col-color-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+
+input[type="color"] {
+  width: 36px;
+  height: 34px;
+  padding: 2px 3px;
+  border-radius: var(--radius-xs);
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  cursor: pointer;
+  flex-shrink: 0;
+}
 
 /* ── Small controls ──────────────────────────────────────── */
 .select-sm, .input-sm {

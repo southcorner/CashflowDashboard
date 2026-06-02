@@ -185,7 +185,7 @@ function renderDashboard() {
       label: col.name,
       value: fmt(total),
       sub: days ? `last ${days} days` : "all time",
-      color: "var(--accent2)",
+      color: col.color || "var(--accent2)",
     });
   });
 
@@ -1057,6 +1057,7 @@ function renderCustomCols(cols) {
     .map(
       (col, i) => `
     <div class="custom-col-item">
+      <span class="col-color-dot" style="background:${col.color || "#22d3ee"}"></span>
       <span class="col-name">${col.name}</span>
       <span class="col-formula">${col.formula}</span>
       <button class="btn-icon" onclick="removeCustomCol(${i})">✕</button>
@@ -1237,13 +1238,15 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   // Settings: add custom column
   document.getElementById("addCustomColBtn").addEventListener("click", async () => {
-    const name = document.getElementById("newColName").value.trim();
+    const name    = document.getElementById("newColName").value.trim();
     const formula = document.getElementById("newColFormula").value.trim();
+    const color   = document.getElementById("newColColor").value;
     if (!name || !formula) { showToast("Name and formula are required."); return; }
     state.settings.custom_columns = state.settings.custom_columns || [];
-    state.settings.custom_columns.push({ name, formula });
-    document.getElementById("newColName").value = "";
+    state.settings.custom_columns.push({ name, formula, color });
+    document.getElementById("newColName").value    = "";
     document.getElementById("newColFormula").value = "";
+    document.getElementById("newColColor").value   = "#22d3ee";
     await saveSettings();
     renderSettings();
   });
