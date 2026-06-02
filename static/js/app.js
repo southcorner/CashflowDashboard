@@ -771,7 +771,7 @@ function getReportCols() {
     { key: "total_sales",       label: "Total Sales",  type: "num"  },
     ...oc.map(ch => ({ key: `o:${ch}`,    label: `${ch} O/S`, type: "num", g: "outstd", ch })),
     { key: "total_outstanding", label: "Total O/S",    type: "num"  },
-    ...cc.map(c  => ({ key: `c:${c.name}`, label: c.name,     type: "num", g: "custom", ch: c.name })),
+    ...cc.map(c  => ({ key: `c:${c.name}`, label: c.name,     type: "num", g: "custom", ch: c.name, color: c.color || "#22d3ee" })),
     { key: "notes",             label: "Notes",        type: "text" },
   ];
 }
@@ -848,10 +848,11 @@ function renderReportTable(cols, entries) {
       if (col.key === "date")  return `<td class="date-cell">${date}</td>`;
       if (col.key === "notes") return `<td>${row.notes || ""}</td>`;
       let cls = "num";
+      let style = "";
       if      (col.key === "incoming") cls += " positive";
       else if (col.key === "outgoing") cls += " negative";
-      else if (col.g === "custom" && typeof v === "number") cls += v >= 0 ? " positive" : " negative";
-      return `<td class="${cls}">${fmt(v)}</td>`;
+      else if (col.g === "custom" && typeof v === "number") style = `color:${col.color}`;
+      return `<td class="${cls}"${style ? ` style="${style}"` : ""}>${fmt(v)}</td>`;
     }).join("")}
     <td><button class="btn-icon" title="Delete" onclick="openDeleteModal('${date}')">✕</button></td>
   </tr>`).join("");
