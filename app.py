@@ -46,6 +46,18 @@ def ensure_dirs():
     os.makedirs(DATA_DIR, exist_ok=True)
     os.makedirs(BACKUP_DIR, exist_ok=True)
     _ensure_admin()
+    _backfill_vendor_payments()
+
+
+def _backfill_vendor_payments():
+    daily = load_json(DAILY_FILE, {})
+    changed = False
+    for row in daily.values():
+        if "vendor_payments" not in row:
+            row["vendor_payments"] = 0
+            changed = True
+    if changed:
+        save_json(DAILY_FILE, daily)
 
 
 # ── Auth ─────────────────────────────────────────────────────────────────────
@@ -171,12 +183,13 @@ def compute_custom(row, custom_columns):
     sales = row.get("sales", {})
     outstanding = row.get("outstanding", {})
     ns = {
-        "incoming": float(row.get("incoming", 0)),
-        "outgoing": float(row.get("outgoing", 0)),
-        "cogs": float(row.get("cogs", 0)),
+        "incoming":         float(row.get("incoming", 0)),
+        "outgoing":         float(row.get("outgoing", 0)),
+        "cogs":             float(row.get("cogs", 0)),
+        "vendor_payments":  float(row.get("vendor_payments", 0)),
         "starting_balance": float(row.get("starting_balance", 0)),
-        "total_sales": float(sum(sales.values())),
-        "total_outstanding": float(sum(outstanding.values())),
+        "total_sales":      float(sum(sales.values())),
+        "total_outstanding":float(sum(outstanding.values())),
         "__builtins__": {},
     }
     for ch, val in sales.items():
@@ -474,13 +487,14 @@ def api_post_data():
 
     daily[date] = {
         "starting_balance": float(data.get("starting_balance", 0)),
-        "incoming": float(data.get("incoming", 0)),
-        "outgoing": float(data.get("outgoing", 0)),
-        "cogs": float(data.get("cogs", 0)),
-        "sales": {k: float(v) for k, v in data.get("sales", {}).items()},
+        "incoming":         float(data.get("incoming", 0)),
+        "outgoing":         float(data.get("outgoing", 0)),
+        "cogs":             float(data.get("cogs", 0)),
+        "vendor_payments":  float(data.get("vendor_payments", 0)),
+        "sales":       {k: float(v) for k, v in data.get("sales", {}).items()},
         "outstanding": {k: float(v) for k, v in data.get("outstanding", {}).items()},
-        "notes": str(data.get("notes", "")),
-        "updated_at": datetime.now().isoformat(),
+        "notes":       str(data.get("notes", "")),
+        "updated_at":  datetime.now().isoformat(),
     }
     save_json(DAILY_FILE, daily)
     return jsonify({"success": True})
@@ -563,13 +577,14 @@ def api_import():
 
             daily[date_str] = {
                 "starting_balance": num(["starting_balance", "Starting Balance"]),
-                "incoming": num(["incoming", "Incoming"]),
-                "outgoing": num(["outgoing", "Outgoing"]),
-                "cogs": num(["cogs", "COGS"]),
-                "sales": sales,
+                "incoming":         num(["incoming", "Incoming"]),
+                "outgoing":         num(["outgoing", "Outgoing"]),
+                "cogs":             num(["cogs", "COGS"]),
+                "vendor_payments":  num(["vendor_payments", "Vendor Payments"]),
+                "sales":       sales,
                 "outstanding": outstd,
-                "notes": str(rd.get("notes") or rd.get("Notes") or ""),
-                "updated_at": datetime.now().isoformat(),
+                "notes":       str(rd.get("notes") or rd.get("Notes") or ""),
+                "updated_at":  datetime.now().isoformat(),
             }
             imported += 1
         except Exception as e:
@@ -602,7 +617,7 @@ def api_export():
     cust_cols = settings.get("custom_columns", [])
 
     headers = (
-        ["Date", "Starting Balance", "Incoming", "Outgoing", "COGS"]
+        ["Date", "Starting Balance", "Incoming", "Outgoing", "COGS", "Vendor Payments"]
         + [f"Sales: {c}" for c in sales_chs]
         + ["Total Sales"]
         + [f"Outstanding: {c}" for c in out_chs]
@@ -623,7 +638,7 @@ def api_export():
         outstd = row.get("outstanding", {})
         vals = (
             [date, row.get("starting_balance", 0), row.get("incoming", 0),
-             row.get("outgoing", 0), row.get("cogs", 0)]
+             row.get("outgoing", 0), row.get("cogs", 0), row.get("vendor_payments", 0)]
             + [sales.get(c, 0) for c in sales_chs]
             + [sum(sales.values())]
             + [outstd.get(c, 0) for c in out_chs]
@@ -661,7 +676,7 @@ def api_template():
     hfill = PatternFill(start_color="0F3460", end_color="0F3460", fill_type="solid")
 
     headers = (
-        ["date", "starting_balance", "incoming", "outgoing", "cogs"]
+        ["date", "starting_balance", "incoming", "outgoing", "cogs", "vendor_payments"]
         + settings.get("sales_channels", [])
         + settings.get("outstanding_channels", [])
         + ["notes"]

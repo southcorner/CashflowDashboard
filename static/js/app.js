@@ -393,6 +393,7 @@ function getCustomFieldValue(row, fieldKey) {
     case "incoming":          return row.incoming          || 0;
     case "outgoing":          return row.outgoing          || 0;
     case "cogs":              return row.cogs              || 0;
+    case "vendor_payments":   return row.vendor_payments   || 0;
     case "starting_balance":  return row.starting_balance  || 0;
     case "total_sales":       return Object.values(row.sales       || {}).reduce((a,b)=>a+b, 0);
     case "total_outstanding": return Object.values(row.outstanding || {}).reduce((a,b)=>a+b, 0);
@@ -412,6 +413,7 @@ function buildCustomChartFieldOptions() {
     { v: "incoming",          l: "Incoming"          },
     { v: "outgoing",          l: "Outgoing"          },
     { v: "cogs",              l: "COGS"              },
+    { v: "vendor_payments",   l: "Vendor Payments"   },
     { v: "starting_balance",  l: "Starting Balance"  },
     { v: "total_sales",       l: "Total Sales"       },
     { v: "total_outstanding", l: "Total Outstanding" },
@@ -579,7 +581,7 @@ function fillEntryForm(date) {
   const row = state.data[date];
   if (!row) {
     // Clear all fields so stale data from a previously viewed date isn't retained
-    ["starting_balance", "incoming", "outgoing", "cogs", "notes"].forEach((n) => {
+    ["starting_balance", "incoming", "outgoing", "cogs", "vendor_payments", "notes"].forEach((n) => {
       if (form.elements[n]) form.elements[n].value = "";
     });
     channels.forEach((ch) => {
@@ -595,11 +597,12 @@ function fillEntryForm(date) {
   }
 
   // Use form.elements[name] — handles channel names with spaces correctly
-  form.elements["starting_balance"].value = row.starting_balance || "";
-  form.elements["incoming"].value         = row.incoming         || "";
-  form.elements["outgoing"].value         = row.outgoing         || "";
-  form.elements["cogs"].value             = row.cogs             || "";
-  form.elements["notes"].value            = row.notes            || "";
+  form.elements["starting_balance"].value = row.starting_balance  || "";
+  form.elements["incoming"].value         = row.incoming          || "";
+  form.elements["outgoing"].value         = row.outgoing          || "";
+  form.elements["cogs"].value             = row.cogs              || "";
+  form.elements["vendor_payments"].value  = row.vendor_payments   || "";
+  form.elements["notes"].value            = row.notes             || "";
 
   channels.forEach((ch) => {
     const el = form.elements[`sales_${ch}`];
@@ -741,9 +744,10 @@ function collectEntryForm() {
   return {
     date: fd.get("date"),
     starting_balance: parseFloat(fd.get("starting_balance") || 0),
-    incoming: parseFloat(fd.get("incoming") || 0),
-    outgoing: parseFloat(fd.get("outgoing") || 0),
-    cogs: parseFloat(fd.get("cogs") || 0),
+    incoming:         parseFloat(fd.get("incoming")         || 0),
+    outgoing:         parseFloat(fd.get("outgoing")         || 0),
+    cogs:             parseFloat(fd.get("cogs")             || 0),
+    vendor_payments:  parseFloat(fd.get("vendor_payments")  || 0),
     notes: fd.get("notes") || "",
     sales,
     outstanding,
@@ -757,11 +761,12 @@ function getReportCols() {
   const oc = state.settings.outstanding_channels || [];
   const cc = state.settings.custom_columns  || [];
   return [
-    { key: "date",              label: "Date",         type: "text" },
-    { key: "starting_balance",  label: "Starting Bal", type: "num"  },
-    { key: "incoming",          label: "Incoming",     type: "num"  },
-    { key: "outgoing",          label: "Outgoing",     type: "num"  },
-    { key: "cogs",              label: "COGS",         type: "num"  },
+    { key: "date",              label: "Date",            type: "text" },
+    { key: "starting_balance",  label: "Starting Bal",    type: "num"  },
+    { key: "incoming",          label: "Incoming",        type: "num"  },
+    { key: "outgoing",          label: "Outgoing",        type: "num"  },
+    { key: "cogs",              label: "COGS",            type: "num"  },
+    { key: "vendor_payments",   label: "Vendor Payments", type: "num"  },
     ...sc.map(ch => ({ key: `s:${ch}`,    label: ch,          type: "num", g: "sales",  ch })),
     { key: "total_sales",       label: "Total Sales",  type: "num"  },
     ...oc.map(ch => ({ key: `o:${ch}`,    label: `${ch} O/S`, type: "num", g: "outstd", ch })),
@@ -778,6 +783,7 @@ function rowVal(date, row, col) {
     case "incoming":          return +(row.incoming           || 0);
     case "outgoing":          return +(row.outgoing           || 0);
     case "cogs":              return +(row.cogs               || 0);
+    case "vendor_payments":   return +(row.vendor_payments    || 0);
     case "total_sales":       return Object.values(row.sales       || {}).reduce((a,b)=>a+b, 0);
     case "total_outstanding": return Object.values(row.outstanding || {}).reduce((a,b)=>a+b, 0);
     default:
