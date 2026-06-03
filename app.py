@@ -33,6 +33,7 @@ DEFAULT_SETTINGS = {
     "sales_channels": ["DF", "AMZ PO", "FK PO", "Katana site", "Offline", "Badpeople site"],
     "outstanding_channels": ["AMZ", "FK", "Offline"],
     "custom_columns": [],
+    "custom_charts": [],
     "delete_password": "spacegoods123",
     "email_enabled": False,
     "email_sender": "",
@@ -434,8 +435,8 @@ def api_update_settings():
             return jsonify({"error": "Current password is incorrect."}), 403
 
     updatable = [
-        "sales_channels", "outstanding_channels", "custom_columns", "delete_password",
-        "email_enabled", "email_sender", "email_password", "email_recipient",
+        "sales_channels", "outstanding_channels", "custom_columns", "custom_charts",
+        "delete_password", "email_enabled", "email_sender", "email_password", "email_recipient",
     ]
     for key in updatable:
         if key in data:
