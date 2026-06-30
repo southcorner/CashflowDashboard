@@ -236,6 +236,14 @@ def _custom_col_total(week_data, custom_columns, col_name):
     return total
 
 
+def _find_col_name(custom_columns, keyword):
+    """Return the actual saved column name that contains keyword (case-insensitive)."""
+    for col in custom_columns:
+        if keyword.lower() in col["name"].lower():
+            return col["name"]
+    return None
+
+
 def generate_weekly_html(settings, daily):
     today = date.today()
     week_start = today - timedelta(days=7)
@@ -245,10 +253,13 @@ def generate_weekly_html(settings, daily):
     week_data = {d: r for d, r in sorted(daily.items()) if week_start_str <= d <= today_str}
     custom_columns = settings.get("custom_columns", [])
 
-    total_sales   = sum(sum(r.get("sales", {}).values()) for r in week_data.values())
-    offline_sales = sum(r.get("sales", {}).get("Offline", 0) for r in week_data.values())
-    total_overhead     = _custom_col_total(week_data, custom_columns, "Overhead")
-    total_gross_profit = _custom_col_total(week_data, custom_columns, "Gross Profit")
+    overhead_col     = _find_col_name(custom_columns, "overhead")
+    gross_profit_col = _find_col_name(custom_columns, "gross profit")
+
+    total_sales        = sum(sum(r.get("sales", {}).values()) for r in week_data.values())
+    offline_sales      = sum(r.get("sales", {}).get("Offline", 0) for r in week_data.values())
+    total_overhead     = _custom_col_total(week_data, custom_columns, overhead_col)     if overhead_col     else 0
+    total_gross_profit = _custom_col_total(week_data, custom_columns, gross_profit_col) if gross_profit_col else 0
 
     def kpi_row(label, value, color):
         return f"""
@@ -283,9 +294,9 @@ def generate_weekly_html(settings, daily):
       <tr><td colspan="2" style="border-top:1px solid #1f2d45;"></td></tr>
       {kpi_row("Offline Sales", _inr(offline_sales), "#06b6d4")}
       <tr><td colspan="2" style="border-top:1px solid #1f2d45;"></td></tr>
-      {kpi_row("Total Overhead", _inr(total_overhead), "#ef4444")}
+      {kpi_row(overhead_col or "Overhead", _inr(total_overhead), "#ef4444")}
       <tr><td colspan="2" style="border-top:1px solid #1f2d45;"></td></tr>
-      {kpi_row("Gross Profit", _inr(total_gross_profit), "#10b981")}
+      {kpi_row(gross_profit_col or "Gross Profit", _inr(total_gross_profit), "#10b981")}
     </table>
   </div>
 
