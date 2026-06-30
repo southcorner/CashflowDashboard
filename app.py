@@ -211,9 +211,29 @@ def compute_custom(row, custom_columns):
 
 def _inr(n):
     try:
-        return f"₹{abs(float(n)):,.0f}"
+        n = int(abs(float(n)))
+        s = str(n)
+        if len(s) <= 3:
+            return f"₹{s}"
+        result = s[-3:]
+        s = s[:-3]
+        while len(s) > 2:
+            result = s[-2:] + "," + result
+            s = s[:-2]
+        if s:
+            result = s + "," + result
+        return f"₹{result}"
     except Exception:
         return "₹0"
+
+
+def _custom_col_total(week_data, custom_columns, col_name):
+    total = 0.0
+    for row in week_data.values():
+        computed = compute_custom(row, custom_columns)
+        val = computed.get(col_name, 0)
+        total += val if isinstance(val, (int, float)) else 0
+    return total
 
 
 def generate_weekly_html(settings, daily):
@@ -223,126 +243,49 @@ def generate_weekly_html(settings, daily):
     today_str = today.isoformat()
 
     week_data = {d: r for d, r in sorted(daily.items()) if week_start_str <= d <= today_str}
-    dates = sorted(week_data.keys())
+    custom_columns = settings.get("custom_columns", [])
 
-    sales_channels = settings.get("sales_channels", [])
-    out_channels = settings.get("outstanding_channels", [])
+    total_sales   = sum(sum(r.get("sales", {}).values()) for r in week_data.values())
+    offline_sales = sum(r.get("sales", {}).get("Offline", 0) for r in week_data.values())
+    total_overhead     = _custom_col_total(week_data, custom_columns, "Overhead")
+    total_gross_profit = _custom_col_total(week_data, custom_columns, "Gross Profit")
 
-    total_incoming = sum(r.get("incoming", 0) for r in week_data.values())
-    total_outgoing = sum(r.get("outgoing", 0) for r in week_data.values())
-    total_cogs = sum(r.get("cogs", 0) for r in week_data.values())
-    net = total_incoming - total_outgoing
-    total_sales = sum(sum(r.get("sales", {}).values()) for r in week_data.values())
-    sales_by_channel = {
-        ch: sum(r.get("sales", {}).get(ch, 0) for r in week_data.values())
-        for ch in sales_channels
-    }
-
-    latest_date = dates[-1] if dates else None
-    latest_outstanding = week_data[latest_date].get("outstanding", {}) if latest_date else {}
-    total_outstanding = sum(latest_outstanding.values())
-
-    net_color = "#10b981" if net >= 0 else "#ef4444"
-
-    def kpi_cell(label, value, color="#e2e8f0"):
-        return f"""<td width="33%" style="padding:4px;">
-          <div style="background:#16213e;border-radius:10px;padding:14px;border:1px solid #1f2d45;">
-            <div style="font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px;">{label}</div>
-            <div style="font-size:18px;font-weight:700;color:{color};">{value}</div>
-          </div></td>"""
-
-    daily_rows = ""
-    for d in reversed(dates):
-        r = week_data[d]
-        day_sales = sum(r.get("sales", {}).values())
-        daily_rows += f"""<tr>
-          <td style="padding:7px 10px;border-bottom:1px solid #1a2540;">{d}</td>
-          <td style="padding:7px 10px;border-bottom:1px solid #1a2540;text-align:right;color:#10b981;">{_inr(r.get('incoming',0))}</td>
-          <td style="padding:7px 10px;border-bottom:1px solid #1a2540;text-align:right;color:#ef4444;">{_inr(r.get('outgoing',0))}</td>
-          <td style="padding:7px 10px;border-bottom:1px solid #1a2540;text-align:right;">{_inr(r.get('cogs',0))}</td>
-          <td style="padding:7px 10px;border-bottom:1px solid #1a2540;text-align:right;">{_inr(day_sales)}</td>
-          <td style="padding:7px 10px;border-bottom:1px solid #1a2540;color:#64748b;">{r.get('notes','')}</td>
+    def kpi_row(label, value, color):
+        return f"""
+        <tr>
+          <td style="padding:14px 20px;font-size:14px;color:#94a3b8;">{label}</td>
+          <td style="padding:14px 20px;font-size:18px;font-weight:700;color:{color};text-align:right;">{value}</td>
         </tr>"""
-    if not daily_rows:
-        daily_rows = '<tr><td colspan="6" style="padding:16px;text-align:center;color:#64748b;">No data recorded this week.</td></tr>'
-
-    sales_rows = "".join(
-        f'<tr><td style="padding:6px 10px;">{ch}</td><td style="padding:6px 10px;text-align:right;">{_inr(val)}</td></tr>'
-        for ch, val in sales_by_channel.items()
-    )
-    outstanding_rows = "".join(
-        f'<tr><td style="padding:6px 10px;">{ch}</td><td style="padding:6px 10px;text-align:right;">{_inr(latest_outstanding.get(ch, 0))}</td></tr>'
-        for ch in out_channels
-    )
 
     html = f"""<!DOCTYPE html>
 <html><head><meta charset="UTF-8"></head>
 <body style="margin:0;padding:0;background:#0d1117;font-family:'Segoe UI',Arial,sans-serif;color:#e2e8f0;">
-<div style="max-width:620px;margin:0 auto;padding:24px;">
+<div style="max-width:520px;margin:0 auto;padding:24px;">
 
-  <div style="background:#16213e;border-radius:12px;padding:20px 24px;margin-bottom:16px;border:1px solid #1f2d45;">
+  <div style="background:#16213e;border-radius:12px;padding:20px 24px;margin-bottom:20px;border:1px solid #1f2d45;">
     <table width="100%" cellpadding="0" cellspacing="0"><tr>
-      <td><div style="background:#6366f1;width:38px;height:38px;border-radius:8px;display:inline-block;text-align:center;line-height:38px;font-weight:700;font-size:13px;margin-right:12px;vertical-align:middle;">SG</div>
-        <span style="font-size:17px;font-weight:700;vertical-align:middle;">Space Goods</span>
-        <div style="font-size:12px;color:#64748b;margin-top:4px;">Weekly Cashflow Report &nbsp;·&nbsp; {week_start_str} to {today_str}</div>
+      <td>
+        <div style="display:inline-block;background:#6366f1;width:36px;height:36px;border-radius:8px;text-align:center;line-height:36px;font-weight:700;font-size:13px;margin-right:10px;vertical-align:middle;">SG</div>
+        <span style="font-size:16px;font-weight:700;vertical-align:middle;">Space Goods</span>
+        <div style="font-size:12px;color:#64748b;margin-top:6px;">Weekly Report &nbsp;·&nbsp; {week_start_str} to {today_str}</div>
       </td>
     </tr></table>
   </div>
 
-  <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:16px;">
-    <tr>
-      {kpi_cell("Total Incoming", _inr(total_incoming), "#10b981")}
-      {kpi_cell("Total Outgoing", _inr(total_outgoing), "#ef4444")}
-      {kpi_cell("Net Cashflow", _inr(net), net_color)}
-    </tr>
-    <tr>
-      {kpi_cell("Total COGS", _inr(total_cogs))}
-      {kpi_cell("Total Sales", _inr(total_sales), "#a855f7")}
-      {kpi_cell("Total Outstanding", _inr(total_outstanding), "#f59e0b")}
-    </tr>
-  </table>
-
-  <table width="100%" cellpadding="0" cellspacing="8" style="margin-bottom:16px;">
-    <tr>
-      <td width="50%" style="padding-right:8px;vertical-align:top;">
-        <div style="background:#16213e;border-radius:10px;padding:16px;border:1px solid #1f2d45;">
-          <div style="font-size:13px;font-weight:600;color:#94a3b8;margin-bottom:10px;">Sales by Channel</div>
-          <table width="100%" cellpadding="0" cellspacing="0" style="font-size:13px;">
-            {sales_rows}
-            <tr style="border-top:1px solid #1f2d45;">
-              <td style="padding:7px 10px;font-weight:600;">Total</td>
-              <td style="padding:7px 10px;text-align:right;font-weight:600;">{_inr(total_sales)}</td>
-            </tr>
-          </table>
-        </div>
-      </td>
-      <td width="50%" style="padding-left:8px;vertical-align:top;">
-        <div style="background:#16213e;border-radius:10px;padding:16px;border:1px solid #1f2d45;">
-          <div style="font-size:13px;font-weight:600;color:#94a3b8;margin-bottom:10px;">Outstanding (as of {latest_date or 'N/A'})</div>
-          <table width="100%" cellpadding="0" cellspacing="0" style="font-size:13px;">
-            {outstanding_rows}
-            <tr style="border-top:1px solid #1f2d45;">
-              <td style="padding:7px 10px;font-weight:600;">Total</td>
-              <td style="padding:7px 10px;text-align:right;font-weight:600;">{_inr(total_outstanding)}</td>
-            </tr>
-          </table>
-        </div>
-      </td>
-    </tr>
-  </table>
-
-  <div style="background:#16213e;border-radius:10px;padding:16px;border:1px solid #1f2d45;margin-bottom:16px;">
-    <div style="font-size:13px;font-weight:600;color:#94a3b8;margin-bottom:10px;">Daily Breakdown</div>
-    <table width="100%" cellpadding="0" cellspacing="0" style="font-size:12px;border-collapse:collapse;">
-      <tr style="color:#64748b;">
-        <th style="padding:7px 10px;text-align:left;font-weight:500;">Date</th>
-        <th style="padding:7px 10px;text-align:right;font-weight:500;">Incoming</th>
-        <th style="padding:7px 10px;text-align:right;font-weight:500;">Outgoing</th>
-        <th style="padding:7px 10px;text-align:right;font-weight:500;">COGS</th>
-        <th style="padding:7px 10px;text-align:right;font-weight:500;">Sales</th>
-        <th style="padding:7px 10px;text-align:left;font-weight:500;">Notes</th>
+  <div style="background:#16213e;border-radius:12px;border:1px solid #1f2d45;overflow:hidden;margin-bottom:20px;">
+    <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
+      <tr style="background:#1a2540;">
+        <td colspan="2" style="padding:12px 20px;font-size:11px;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:0.08em;">
+          Weekly Summary
+        </td>
       </tr>
-      {daily_rows}
+      {kpi_row("Total Weekly Sales", _inr(total_sales), "#a855f7")}
+      <tr><td colspan="2" style="border-top:1px solid #1f2d45;"></td></tr>
+      {kpi_row("Offline Sales", _inr(offline_sales), "#06b6d4")}
+      <tr><td colspan="2" style="border-top:1px solid #1f2d45;"></td></tr>
+      {kpi_row("Total Overhead", _inr(total_overhead), "#ef4444")}
+      <tr><td colspan="2" style="border-top:1px solid #1f2d45;"></td></tr>
+      {kpi_row("Gross Profit", _inr(total_gross_profit), "#10b981")}
     </table>
   </div>
 
